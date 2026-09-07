@@ -11,10 +11,10 @@ namespace QuickClip.Services;
 /// <summary>
 /// 全局热键服务，两层接管策略：
 /// 1. RegisterHotKey + 隐藏消息窗口（WM_HOTKEY）：接管固定的“纯文本粘贴”热键（Ctrl+Shift+V，可启用/禁用）；
-/// 2. WH_KEYBOARD_LL 低级钩子：Win+V 因系统剪贴板历史已占用无法用 RegisterHotKey 抢占，
-///    改由钩子拦截：吞掉 Win 键按下抑制开始菜单误弹，V 进入和弦判定后触发面板切换；
+/// 2. WH_KEYBOARD_LL 低级钩子：Win+V 因需抑制开始菜单误弹，必须吞掉 Win 键物理按下事件，
+///    导致操作系统热键判定无法收到完整和弦；由钩子统一捕获 Win+V 并执行 300ms 防抖唤起；
 ///    若用户实际按下的是其它 Win 快捷键（Win+E 等），则重放注入完整和弦保留系统行为。
-///    RegisterHotKey 注册失败的组合同样回退到钩子。
+///    同时 RegisterHotKey 独占声明 Win+V 避免外部其它程序占用。
 /// 
 /// @author xudong.hua,gemini
 /// @since 2026-08-19 16:00 星期三
@@ -58,6 +58,8 @@ public sealed class HotkeyService : IDisposable
     private volatile bool _winVKeyDown;
     private volatile bool _plainPasteKeyDown;
 
+    // 切换请求防抖时间戳（TickCount64），避免钩子与 WM_HOTKEY 极端并发导致双触发
+    private long _lastToggleTicks;
 
     /// <summary>Win+V 被按下时触发（在 UI 线程回调），用于唤起/隐藏面板。</summary>
     public event Action? ToggleRequested;
@@ -272,11 +274,36 @@ public sealed class HotkeyService : IDisposable
             {
                 handled = true;
                 DebugLog.Log("收到 WM_HOTKEY：Win+V 切换");
-                ToggleRequested?.Invoke();
+                RequestToggle("WM_HOTKEY");
             }
         }
 
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// 统一调度面板切换请求（带 300ms 冷却防抖），
+    /// 无论来自低级钩子还是 WM_HOTKEY，均能安全唤起且杜绝双触发。
+    /// </summary>
+    private void RequestToggle(string source)
+    {
+        long now = Environment.TickCount64;
+        while (true)
+        {
+            long last = Interlocked.Read(ref _lastToggleTicks);
+            if (now - last < 300)
+            {
+                DebugLog.LogDetail($"忽略防抖期内的重复切换请求 ({source})");
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _lastToggleTicks, now, last) == last)
+            {
+                break;
+            }
+        }
+
+        _uiDispatcher?.BeginInvoke(() => ToggleRequested?.Invoke());
     }
 
     private void HookThreadMain()
@@ -306,11 +333,19 @@ public sealed class HotkeyService : IDisposable
             _uiDispatcher?.BeginInvoke(() => HotkeyInstallFailed?.Invoke(error));
         }
 
-        // 标准 Win32 消息循环：低级钩子回调依赖 GetMessage 检索消息
-        while (NativeMethods.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
+        try
         {
-            NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg);
+            // 标准 Win32 消息循环：低级钩子回调依赖 GetMessage 检索消息
+            while (NativeMethods.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
+            {
+                NativeMethods.TranslateMessage(ref msg);
+                NativeMethods.DispatchMessage(ref msg);
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.LogException("热键钩子线程消息泵异常退出", ex);
+            _uiDispatcher?.BeginInvoke(() => HotkeyInstallFailed?.Invoke("热键钩子线程异常退出，Win+V 可能无法接管"));
         }
 
         DebugLog.Log("热键钩子线程消息泵退出");
@@ -393,12 +428,11 @@ public sealed class HotkeyService : IDisposable
                                 _winVKeyDown = true;
                                 _winChordHandled = true;
 
-                                // RegisterHotKey 成功时由 WM_HOTKEY 统一触发，钩子只吞键防泄漏，避免双触发
-                                if (!_winVRegistered)
-                                {
-                                    DebugLog.Log($"捕获 Win+V（钩子接管，injected={isInjected}）");
-                                    _uiDispatcher?.BeginInvoke(() => ToggleRequested?.Invoke());
-                                }
+                                // 无论 RegisterHotKey 是否成功，因 Win 键按下已被吞掉以防开始菜单误弹，
+                                // 操作系统热键引擎收不到完整组合键，绝不会派发 WM_HOTKEY；
+                                // 必须由钩子直接触发唤起，并通过统一的 RequestToggle 执行 300ms 防抖。
+                                DebugLog.Log($"捕获 Win+V（钩子接管，registered={_winVRegistered}, injected={isInjected}）");
+                                RequestToggle("HookChord");
                             }
 
                             return new IntPtr(1);
@@ -428,8 +462,8 @@ public sealed class HotkeyService : IDisposable
 
                 DebugLog.LogDetail($"HookCallback: vk={hook.vkCode} msg={msg} injected={isInjected} win={winHeld} ctrl={ctrlDown} shift={shiftDown}");
 
-                // ---------- Win+V 兜底拦截（在 RegisterHotKey 失败且处于和弦重放/多键并发状态时） ----------
-                if (!_winVRegistered && hook.vkCode == NativeMethods.VK_V && winHeld)
+                // ---------- Win+V 兜底拦截（处于和弦重放/多键并发状态时） ----------
+                if (hook.vkCode == NativeMethods.VK_V && winHeld)
                 {
                     if (isKeyDown)
                     {
@@ -437,8 +471,8 @@ public sealed class HotkeyService : IDisposable
                         {
                             _winVKeyDown = true;
                             _winChordHandled = true;
-                            DebugLog.Log($"捕获 Win+V（钩子兜底接管，injected={isInjected}）");
-                            _uiDispatcher?.BeginInvoke(() => ToggleRequested?.Invoke());
+                            DebugLog.Log($"捕获 Win+V（钩子兜底接管，registered={_winVRegistered}, injected={isInjected}）");
+                            RequestToggle("HookFallback");
                         }
                     }
                     else

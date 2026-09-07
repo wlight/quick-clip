@@ -24,9 +24,11 @@ public partial class App : System.Windows.Application
         SessionEnding += OnSessionEnding;
 
         bool fromAutostart = HasAutostartArg(e.Args);
+        DebugLog.Log($"开始启动 QuickClip: pid={Environment.ProcessId}, autostart={fromAutostart}, args=[{string.Join(", ", e.Args)}]");
 
         _mutex = new Mutex(false, @"Local\QuickClip_SingleInstance");
         bool acquired = TryAcquireMutex(_mutex, retries: 10, delayMs: 200);
+        DebugLog.Log($"单实例互斥锁获取结果: acquired={acquired}");
 
         if (!acquired && UpdateService.IsInstalledCopy() && TryReplaceForeignInstances())
         {
@@ -35,6 +37,7 @@ public partial class App : System.Windows.Application
 
         if (!acquired)
         {
+            DebugLog.Log("检测到已有 QuickClip 实例，发送显示消息后退出");
             uint msg = NativeMethods.RegisterWindowMessage("QUICKCLIP_SHOW_WINDOW_MSG");
             NativeMethods.PostMessage((IntPtr)NativeMethods.HWND_BROADCAST, msg, IntPtr.Zero, IntPtr.Zero);
             Shutdown();
@@ -53,6 +56,7 @@ public partial class App : System.Windows.Application
         _services = new AppServices();
         if (!_services.Initialize(fromAutostart))
         {
+            DebugLog.Log("服务初始化要求当前进程退出");
             Shutdown();
             return;
         }
@@ -64,9 +68,18 @@ public partial class App : System.Windows.Application
         var window = new MainWindow(viewModel, _services) { DataContext = viewModel };
         _services.MainWindow = window;
 
-        // 首次启动展示主窗口，便于用户了解工具已就绪
-        window.Show();
-        window.Activate();
+        // 首次手动启动展示主窗口，便于用户了解工具已就绪；开机自启动则静默驻留托盘待命
+        if (!fromAutostart)
+        {
+            window.Show();
+            window.Activate();
+        }
+        else
+        {
+            DebugLog.Log("开机自启动：保持后台静默运行");
+        }
+
+        DebugLog.Log("QuickClip 启动完成");
     }
 
     protected override void OnExit(System.Windows.ExitEventArgs e)
