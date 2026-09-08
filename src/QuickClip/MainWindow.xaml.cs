@@ -490,6 +490,12 @@ public partial class MainWindow : FluentWindow
 
         if (settings.MoveDownHotkey.Matches(key, modifiers))
         {
+            // 焦点在搜索框时由 PreviewKeyDown 提前处理，避免重复移动
+            if (IsSearchFocused())
+            {
+                return;
+            }
+
             MoveSelection(1);
             e.Handled = true;
             return;
@@ -497,6 +503,12 @@ public partial class MainWindow : FluentWindow
 
         if (settings.MoveUpHotkey.Matches(key, modifiers))
         {
+            // 焦点在搜索框时由 PreviewKeyDown 提前处理，避免重复移动
+            if (IsSearchFocused())
+            {
+                return;
+            }
+
             MoveSelection(-1);
             e.Handled = true;
             return;
@@ -519,6 +531,36 @@ public partial class MainWindow : FluentWindow
     }
 
     private static bool IsSearchFocused() => Keyboard.FocusedElement is System.Windows.Controls.TextBox;
+
+    /// <summary>
+    /// 焦点在搜索框时，TextBox 会在 KeyDown 冒泡到窗口前把 ↑/↓ 吞掉（内部标记 Handled），
+    /// 导致窗口 KeyDown 收不到方向键、列表选中无法移动。这里在 PreviewKeyDown 隧道阶段
+    /// （先于控件处理）拦截方向键移动列表选中；普通字符不匹配，仍正常输入搜索框。
+    /// </summary>
+    private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!IsSearchFocused())
+        {
+            return;
+        }
+
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        key = Models.HotkeyBinding.NormalizeKey(key);
+        var modifiers = Keyboard.Modifiers &
+                        (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift | ModifierKeys.Windows);
+        var settings = _services.Settings;
+
+        if (settings.MoveDownHotkey.Matches(key, modifiers))
+        {
+            MoveSelection(1);
+            e.Handled = true;
+        }
+        else if (settings.MoveUpHotkey.Matches(key, modifiers))
+        {
+            MoveSelection(-1);
+            e.Handled = true;
+        }
+    }
 
     private void PasteItemAt(int index)
     {
