@@ -70,8 +70,8 @@ public sealed class SettingsService
     /// <summary>仅记录文本/链接，忽略图片与文件。</summary>
     public bool TextOnlyCapture { get; private set; }
 
-    /// <summary>启动后延迟检查 GitHub 并下载对应渠道安装包。默认开启。</summary>
-    public bool AutoCheckUpdates { get; private set; } = true;
+    /// <summary>启动后延迟检查 GitHub 并下载对应渠道安装包。个人自用构建默认关闭。</summary>
+    public bool AutoCheckUpdates { get; private set; }
 
     /// <summary>上次静默检查时间（UTC）。用于 24 小时节流。</summary>
     public DateTime? LastUpdateCheckUtc { get; private set; }
@@ -149,7 +149,7 @@ public sealed class SettingsService
             ApplyVisionApiFromDto(dto, dto.OcrEngine);
 
             TextOnlyCapture = dto.TextOnlyCapture ?? false;
-            AutoCheckUpdates = dto.AutoCheckUpdates ?? true;
+            AutoCheckUpdates = dto.AutoCheckUpdates ?? false;
             LastUpdateCheckUtc = ParseUtc(dto.LastUpdateCheckUtc);
             MaxHistoryItems = ClampMaxHistory(dto.MaxHistoryItems ?? DefaultMaxHistoryItems);
 

@@ -63,7 +63,7 @@ public sealed class UpdateActivity
 /// </summary>
 public sealed class UpdateService : IDisposable
 {
-    private const string RepoOwner = "soldier-cv";
+    private const string RepoOwner = "wlight";
     private const string RepoName = "quick-clip";
     private const string LatestReleaseApi = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
     private const string ReleasesPageUrl = $"https://github.com/{RepoOwner}/{RepoName}/releases";
