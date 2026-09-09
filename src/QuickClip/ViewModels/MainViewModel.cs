@@ -446,7 +446,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         });
         string joinedNames = string.Join(Environment.NewLine, names);
 
-        _services.Pipeline.SuppressCapture("text:" + joinedNames);
+        _services.Pipeline.SuppressCapture(ClipboardDataExtractor.TextDedupKey(joinedNames));
         await _services.Paste.CopyTextAsync(joinedNames, plainOnly: true);
         StatusText = "已复制文件名";
     }
@@ -465,7 +465,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        _services.Pipeline.SuppressCapture("text:" + item.TextContent);
+        _services.Pipeline.SuppressCapture(ClipboardDataExtractor.TextDedupKey(item.TextContent));
         await _services.Paste.CopyTextAsync(item.TextContent, plainOnly: true);
         StatusText = "已复制全路径";
     }
@@ -481,7 +481,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         string text = selected.QrText;
-        _services.Pipeline.SuppressCapture("text:" + text);
+        _services.Pipeline.SuppressCapture(ClipboardDataExtractor.TextDedupKey(text));
         try
         {
             await _services.Paste.CopyTextAsync(text);
@@ -496,12 +496,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         StatusText = "已复制二维码文本";
     }
 
-    /// <summary>与捕获侧近似的去重键提示（文本精确；文件/图片靠 Suppress 时间窗）。</summary>
+    /// <summary>
+    /// 与捕获侧一致的去重键提示：文本/文件可精确重建（内容哈希）；图片键依赖 PNG 字节，
+    /// 复制回写后系统可能重新编码，不可靠，仍靠 Suppress 时间窗兜底。
+    /// </summary>
     private static string? BuildDedupKeyHint(ClipboardItem item) =>
         item.ContentType switch
         {
             ClipboardContentType.Text or ClipboardContentType.Link
-                => string.IsNullOrEmpty(item.TextContent) ? null : "text:" + item.TextContent,
+                => ClipboardDataExtractor.TextDedupKey(item.TextContent),
+            ClipboardContentType.File
+                => ClipboardDataExtractor.FileTextDedupKey(item.TextContent),
             _ => null
         };
 

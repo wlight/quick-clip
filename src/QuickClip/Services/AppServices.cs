@@ -108,7 +108,22 @@ public sealed class AppServices : IDisposable
         Hotkey.Start(Dispatcher.CurrentDispatcher, Settings);
 
         Tray.SetAutoStartChecked(Settings.AutoStart);
+
+        // 老库升级：后台补齐历史去重键，尽量在首次复制前完成全历史去重
+        _ = WarmUpDedupKeysAsync();
         return true;
+    }
+
+    private async Task WarmUpDedupKeysAsync()
+    {
+        try
+        {
+            await Database.EnsureDedupKeysReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            DebugLog.LogException("历史去重键初始化失败", ex);
+        }
     }
 
     /// <summary>设置变更联动：热键重新注册；自启动仅在状态变化时写注册表并同步托盘勾选。</summary>

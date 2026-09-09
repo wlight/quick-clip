@@ -47,7 +47,7 @@ public sealed class ClipboardPipeline
 
     /// <summary>
     /// 应用从历史「复制/粘贴」回写系统剪贴板前调用：短时间内忽略捕获，
-    /// 避免同一条内容再插到列表第一行。
+    /// 避免同一条内容触发去重置顶或重复入库。
     /// </summary>
     public void SuppressCapture(string? dedupKey = null, int milliseconds = 2500)
     {
@@ -125,7 +125,8 @@ public sealed class ClipboardPipeline
             lock (_lock)
             {
                 var now = DateTime.Now;
-                // 短时间相同内容去重（连续复制同一段 / 历史回写）
+                // 快速路径：8 秒内连续相同内容直接忽略（同一段反复回写 / 应用重复设置剪贴板）。
+                // 更久远的相同内容由下方全历史去重处理（命中则刷新时间置顶，不新增）。
                 if (_lastKey == data.DedupKey && (now - _lastTime).TotalSeconds < 8)
                 {
                     TryDeletePreview(data.PreviewPath);
@@ -143,6 +144,35 @@ public sealed class ClipboardPipeline
                 qr = await Task.Run(() => _qr.Decode(data.PreviewPath!));
             }
 
+            // 全历史永久去重：命中已有记录则置顶（刷新 created_at），不再新增一行
+            await _db.EnsureDedupKeysReadyAsync();
+            if (data.DedupKey is { Length: > 0 })
+            {
+                var existing = await _db.TouchByDedupKeyAsync(
+                    data.DedupKey, data.CharCount,
+                    data.ContentType == ClipboardContentType.Image ? data.PreviewPath : null);
+                if (existing != null)
+                {
+                    // 旧预览已缺失时数据库会改为引用新文件，此时新文件不能删
+                    if (!string.Equals(existing.PreviewPath, data.PreviewPath, StringComparison.Ordinal))
+                    {
+                        TryDeletePreview(data.PreviewPath);
+                    }
+
+                    // 图片再次复制时若历史里还没识别出二维码，顺手补上
+                    if (existing.ContentType == ClipboardContentType.Image &&
+                        string.IsNullOrEmpty(existing.QrContent) &&
+                        !string.IsNullOrEmpty(qr))
+                    {
+                        await _db.UpdateQrContentAsync(existing.Id, qr);
+                        existing.QrContent = qr;
+                    }
+
+                    ItemAdded?.Invoke(existing);
+                    return;
+                }
+            }
+
             var item = new ClipboardItem
             {
                 ContentType = data.ContentType,
@@ -155,7 +185,7 @@ public sealed class ClipboardPipeline
                 CreatedAt = DateTime.Now
             };
 
-            await _db.InsertAsync(item);
+            await _db.InsertAsync(item, data.DedupKey);
 
             var trimmed = await _db.TrimToMaxItemsAsync(_settings.MaxHistoryItems);
             foreach (var (_, preview) in trimmed)

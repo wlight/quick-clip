@@ -2,6 +2,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using QuickClip.Models;
 using QuickClip.Native;
 
@@ -83,7 +84,7 @@ public static class ClipboardDataExtractor
             ContentType = isLink ? ClipboardContentType.Link : ClipboardContentType.Text,
             Text = text,
             CharCount = text.Length,
-            DedupKey = "text:" + text
+            DedupKey = TextDedupKey(text)
         };
     }
 
@@ -104,7 +105,7 @@ public static class ClipboardDataExtractor
         }
 
         long totalBytes = 0;
-        var key = "files:" + string.Join('|', files.Select(f =>
+        foreach (string f in files)
         {
             try
             {
@@ -113,14 +114,12 @@ public static class ClipboardDataExtractor
                 {
                     totalBytes += info.Length;
                 }
-
-                return info.Name + ":" + info.Length + ":" + info.LastWriteTimeUtc.Ticks;
             }
             catch
             {
-                return f;
+                // 忽略单个文件读取失败，展示字节数只作参考
             }
-        }));
+        }
 
         return new CapturedClipboardData
         {
@@ -129,7 +128,7 @@ public static class ClipboardDataExtractor
             Text = joined,
             // 展示用：总字节数（非文件个数）
             CharCount = totalBytes > 0 ? totalBytes : files.Length,
-            DedupKey = key
+            DedupKey = FileDedupKey(files)
         };
     }
 
@@ -198,5 +197,41 @@ public static class ClipboardDataExtractor
         using var sha = SHA256.Create();
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(sha.ComputeHash(stream));
+    }
+
+    /// <summary>文本去重键：内容哈希，避免超长文本把键和内容双份落库。</summary>
+    public static string? TextDedupKey(string? text) =>
+        string.IsNullOrEmpty(text) ? null : "t:" + Sha256Hex(text);
+
+    /// <summary>
+    /// 文件列表去重键：按路径集合（去重、不区分大小写排序）哈希。
+    /// 同一批文件无论复制的先后顺序还是文件修改时间变化，都视为同一条历史。
+    /// </summary>
+    public static string? FileDedupKey(IEnumerable<string> files)
+    {
+        string joined = string.Join("\n", files
+            .Where(f => !string.IsNullOrWhiteSpace(f))
+            .Select(f => f.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(f => f, StringComparer.Ordinal));
+        return string.IsNullOrEmpty(joined) ? null : "f:" + Sha256Hex(joined);
+    }
+
+    /// <summary>按已存历史条目的文本（换行分隔的路径列表）计算文件去重键，用于老库回填。</summary>
+    public static string? FileTextDedupKey(string? textContent)
+    {
+        if (string.IsNullOrEmpty(textContent))
+        {
+            return null;
+        }
+
+        return FileDedupKey(textContent.Split(
+            new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string Sha256Hex(string value)
+    {
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(value)));
     }
 }
