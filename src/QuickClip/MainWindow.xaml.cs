@@ -72,6 +72,8 @@ public partial class MainWindow : FluentWindow
         {
             _previewCloseTimer.Stop();
             PreviewPopup.IsOpen = false;
+            // 预览浮层本身是「暂不隐藏」的理由之一，关掉后补一次失焦判定，避免面板滞留
+            HideIfFocusLost();
         };
 
         // 窗口置顶联动：设置变更（Ctrl+P / 标题栏按钮 / 设置窗口）即时生效
@@ -242,22 +244,56 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        // 失焦即隐：点到其他应用时隐藏（仿系统 Win+V）。
-        // 打开设置窗时主窗也会失焦，不能当「点到外部」——否则列表会被误收起。
-        if (IsVisible && !_exiting && !_services.Settings.WindowAlwaysOnTop &&
-            QrOverlay.Visibility == Visibility.Collapsed &&
-            OcrOverlay.Visibility == Visibility.Collapsed &&
-            !ItemMenuPopup.IsOpen &&
-            !IsSettingsWindowOpen())
-        {
-            DebugLog.Log("失焦隐藏面板");
-            HideWindow();
-        }
+        // 失焦即隐：点到其他应用时隐藏（仿系统 Win+V）
+        HideIfFocusLost();
     }
 
     /// <summary>设置窗口是否正在显示（含刚激活、主窗暂失焦的情况）。</summary>
     private bool IsSettingsWindowOpen() =>
         _settingsWindow is { IsVisible: true };
+
+    /// <summary>
+    /// 面板是否必须保持打开：置顶（图钉）、二维码 / OCR 浮层、条目「…」菜单、悬停预览、
+    /// 设置窗，或焦点落在本进程自己的窗口上——确认框、另存为对话框、自身弹层都会让主窗「失焦」，
+    /// 但那不是「点到外部应用」，据此收起面板只会让面板莫名消失。
+    /// </summary>
+    private bool ShouldKeepPanelOpen() =>
+        _exiting ||
+        _services.Settings.WindowAlwaysOnTop ||
+        QrOverlay.Visibility == Visibility.Visible ||
+        OcrOverlay.Visibility == Visibility.Visible ||
+        PreviewPopup.IsOpen ||
+        ItemMenuPopup.IsOpen ||
+        IsSettingsWindowOpen() ||
+        IsForegroundWindowOwnedBySelf();
+
+    /// <summary>
+    /// 失焦兜底收起：失焦事件、条目菜单关闭、悬停预览关闭三处共用，
+    /// 保证「暂不隐藏的理由消失后」面板不会滞留在屏幕上。
+    /// </summary>
+    private void HideIfFocusLost()
+    {
+        if (!IsVisible || IsActive || ShouldKeepPanelOpen())
+        {
+            return;
+        }
+
+        DebugLog.Log("失焦隐藏面板");
+        HideWindow();
+    }
+
+    /// <summary>前台窗口是否属于本进程（含自身的弹层、确认框与另存为对话框）。</summary>
+    private static bool IsForegroundWindowOwnedBySelf()
+    {
+        IntPtr foreground = QuickClip.Native.NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        QuickClip.Native.NativeMethods.GetWindowThreadProcessId(foreground, out uint processId);
+        return processId == (uint)Environment.ProcessId;
+    }
 
     /// <summary>唤起 / 切换窗口（可由键盘钩子或托盘触发）。</summary>
     private void ToggleWindow()
@@ -1417,14 +1453,7 @@ public partial class MainWindow : FluentWindow
     private void OnItemMenuActionClicked(object sender, RoutedEventArgs e) => ItemMenuPopup.IsOpen = false;
 
     /// <summary>菜单关闭后：面板已失焦则按「失焦即隐」规则收起。</summary>
-    private void OnItemMenuClosed(object? sender, EventArgs e)
-    {
-        if (IsVisible && !_exiting && !IsActive &&
-            !_services.Settings.WindowAlwaysOnTop && !IsSettingsWindowOpen())
-        {
-            HideWindow();
-        }
-    }
+    private void OnItemMenuClosed(object? sender, EventArgs e) => HideIfFocusLost();
 
     /// <summary>菜单「粘贴到当前窗口」：先选中该条目再走统一粘贴路径。</summary>
     private void OnPasteFromMenuClicked(object sender, RoutedEventArgs e)
