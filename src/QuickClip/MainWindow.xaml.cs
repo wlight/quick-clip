@@ -203,12 +203,6 @@ public partial class MainWindow : FluentWindow
         PreviewQrDecodeScroll.Background = System.Windows.Media.Brushes.Transparent;
     }
 
-    /// <summary>窗口句柄创建后挂载剪贴板监听。</summary>
-    private void OnSourceInitialized(object? sender, EventArgs e)
-    {
-        _services.Monitor.Attach(this);
-    }
-
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (_exiting)

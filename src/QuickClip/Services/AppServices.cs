@@ -101,6 +101,8 @@ public sealed class AppServices : IDisposable
 
         // 先挂监听 + 热键（核心路径），再同步托盘
         Monitor.ClipboardUpdated += Pipeline.OnClipboardUpdated;
+        // 监听挂在自建隐藏窗口上，这里就要建窗注册，不能等主窗口显示（开机自启时主窗口不显示）
+        Monitor.Attach(Dispatcher.CurrentDispatcher);
         // 历史项复制/粘贴回写系统剪贴板时抑制捕获，避免列表顶部再插一条相同记录
         Paste.SelfClipboardWrite += () => Pipeline.SuppressCapture();
         Hotkey.HotkeyInstallFailed += message => Tray.ShowBalloonTip("QuickClip", message);

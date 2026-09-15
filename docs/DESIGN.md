@@ -47,7 +47,7 @@ graph TD
 - **管理员窗口兜底（UIPI）**：`WH_KEYBOARD_LL` 钩子无法收到「以管理员权限运行」窗口的键盘输入（Windows UIPI 权限隔离），此时 `Win+V` 会漏给系统弹出原生剪贴板历史。`SystemClipboardGuard` 以 120ms 低频轮询前台窗口，命中「系统剪贴板历史」（类名 `Windows.UI.Core.CoreWindow` + 标题含「剪贴板历史 / Clipboard history」）后注入 ESC（`SendInput` 不受 UIPI 影响）并发送 `WM_CLOSE` 关闭它，再唤起 QuickClip 面板；同一窗口句柄 5 秒冷却防抖。钩子正常接管时该窗口不会出现，守卫零干扰。
 
 ### 2.2 剪贴板监听与防抖
-- 使用 `AddClipboardFormatListener(IntPtr hWnd)`。
+- 使用 `AddClipboardFormatListener(IntPtr hWnd)`，`hWnd` 为服务自建的隐藏消息窗口（`ClipboardMonitor` 内部创建，不依赖主窗口）。
 - 窗口消息循环处理 `WM_CLIPBOARDUPDATE (0x031D)`。
 - 粘贴自身回填时置位 `_isSelfPasting = true`，并在捕获事件时过滤，避免循环捕获。
 
@@ -151,7 +151,7 @@ graph TD
 - 项目中的 `NativeMethods.SendCtrlV()`（粘贴回填）已按 40 字节布局实现。
 
 ### 4.3 剪贴板监听与防循环
-- 使用 `AddClipboardFormatListener` 挂到主窗口句柄，处理 `WM_CLIPBOARDUPDATE (0x031D)`。
+- 使用 `AddClipboardFormatListener` 挂到自建隐藏消息窗口，处理 `WM_CLIPBOARDUPDATE (0x031D)`；监听在 `AppServices.Initialize` 阶段建立，不能挂主窗口——开机自启是静默驻留、主窗口不显示（HWND 未创建），挂主窗口会导致「不按一次 Win+V 就不记录复制内容」。
 - 自身粘贴回填时 `PasteService.IsSelfPasting` 置位 600ms，流水线据此过滤，避免「复制 → 入库 → 回填 → 再捕获」死循环。
 
 ### 4.4 诊断日志
