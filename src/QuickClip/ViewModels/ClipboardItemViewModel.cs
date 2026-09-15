@@ -129,9 +129,10 @@ public sealed class ClipboardItemViewModel : INotifyPropertyChanged
             : item.TextContent;
 
         // 延迟解码 + LRU 缓存，虚拟化滚出后可被淘汰
+        // 列表缩略图按 480 宽解码：单列宽卡片里超宽图（限高 96）可能占满整行，240 会被拉糊
         _thumbnail = new Lazy<BitmapImage?>(() =>
             IsImage && !string.IsNullOrEmpty(item.PreviewPath) && File.Exists(item.PreviewPath)
-                ? ThumbnailCache.GetOrCreate(item.PreviewPath!, 240)
+                ? ThumbnailCache.GetOrCreate(item.PreviewPath!, 480)
                 : null);
 
         _hoverThumbnail = new Lazy<BitmapImage?>(() =>

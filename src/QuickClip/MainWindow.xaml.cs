@@ -19,8 +19,8 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private SettingsWindow? _settingsWindow;
     private bool _exiting;
-    /// <summary>磁贴列数兜底值（WrapPanel 尚未完成布局时用）：窗口宽 420、磁贴宽 190 → 2 列。</summary>
-    private const int DefaultTileColumns = 2;
+    /// <summary>单列宽卡片布局下每行 1 项；改回 WrapPanel 网格时按实宽自动算列数。</summary>
+    private const int DefaultListColumns = 1;
 
     /// <summary>热键唤起后短时忽略 Deactivated，避免 Activate 被前台锁拒绝时立刻 Hide。</summary>
     private DateTime _suppressDeactivateUntil = DateTime.MinValue;
@@ -592,7 +592,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>
     /// 方向键统一在 PreviewKeyDown（隧道阶段，先于控件处理）接管：
     /// 搜索框聚焦时 TextBox 会在 KeyDown 冒泡到窗口前吞掉 ↑/↓，列表聚焦时 ListBox 自带的
-    /// 焦点导航又会抢走 ←/→（表现为两列布局下只能上下、不能左右）。
+    /// 焦点导航又会抢走 ←/→（网格布局下表现为只能上下、不能左右）。
     /// ↑/↓ 按行移动，←/→ 同行左右移动；搜索框内的 ←/→ 仅在光标抵边界且无选区时才接管为列表移动，
     /// 其余情况仍交还文本框移动光标，普通字符不匹配、照常输入。
     /// </summary>
@@ -700,21 +700,24 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    /// <summary>当前每行的磁贴列数：WrapPanel 实宽 ÷ 磁贴宽（含外边距），未完成布局时用兜底值。</summary>
-    private int GetTileColumns()
+    /// <summary>
+    /// 当前每行可放几项：单列宽卡片（StackPanel）恒为 1；
+    /// 若面板换回 WrapPanel 网格，则按实宽 ÷ 项宽（含外边距）算列数，未完成布局时用兜底值。
+    /// </summary>
+    private int GetListColumns()
     {
         if (ItemList.ItemsPanelRoot is WrapPanel panel && panel.ItemWidth > 0 && panel.ActualWidth > 0)
         {
             return Math.Max(1, (int)Math.Floor(panel.ActualWidth / panel.ItemWidth));
         }
 
-        return DefaultTileColumns;
+        return DefaultListColumns;
     }
 
-    /// <summary>↑ / ↓：整行移动，列号保持不变。</summary>
-    private void MoveSelectionByRow(int rowDelta) => MoveSelection(rowDelta * GetTileColumns());
+    /// <summary>↑ / ↓：整行移动（单列即逐项移动），列号保持不变。</summary>
+    private void MoveSelectionByRow(int rowDelta) => MoveSelection(rowDelta * GetListColumns());
 
-    /// <summary>← / →：同行内左右移动；行首 / 行尾不折返到相邻行。</summary>
+    /// <summary>← / →：同行内左右移动；单列布局下列号为 1，左右键不移动（留给光标/其它用途）。</summary>
     private void MoveSelectionInRow(int columnDelta)
     {
         if (_viewModel.Items.Count == 0)
@@ -722,7 +725,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        int columns = GetTileColumns();
+        int columns = GetListColumns();
         int column = CurrentSelectionIndex() % columns;
         int targetColumn = column + columnDelta;
         if (targetColumn < 0 || targetColumn >= columns)
@@ -1424,7 +1427,7 @@ public partial class MainWindow : FluentWindow
 
     // ---------- 条目「…」菜单 ----------
 
-    /// <summary>磁贴「…」：把菜单挂到按钮上（上下自动避让），DataContext 指向该条目。</summary>
+    /// <summary>卡片「…」：把菜单挂到按钮上（上下自动避让），DataContext 指向该条目。</summary>
     private void OnItemMenuClicked(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement target || GetCardViewModel(sender) is not { } vm)
@@ -1436,7 +1439,7 @@ public partial class MainWindow : FluentWindow
         ItemMenuPopup.DataContext = vm;
         ItemMenuPopup.PlacementTarget = target;
 
-        // 屏幕下半部分的磁贴向上弹，避免菜单超出工作区
+        // 屏幕下半部分的卡片向上弹，避免菜单超出工作区
         System.Windows.Point topLeft = target.PointToScreen(new System.Windows.Point(0, 0));
         var screen = System.Windows.Forms.Screen.FromPoint(
             new System.Drawing.Point((int)topLeft.X, (int)topLeft.Y));
@@ -1583,7 +1586,7 @@ public partial class MainWindow : FluentWindow
             $"单击选中 · 双击粘贴 · 条目「…」菜单或 [{s.CopySelectedHotkey}] 仅复制\n" +
             $"[{s.PasteSelectedHotkey}] 粘贴选中项\n" +
             $"[{s.PasteSelectedPlainHotkey}] 纯文本粘贴选中项\n" +
-            $"[{s.MoveUpHotkey} {s.MoveDownHotkey} {s.MoveLeftHotkey} {s.MoveRightHotkey}] 移动选中（↑↓ 跨行 / ←→ 同行）\n" +
+            $"[{s.MoveUpHotkey} {s.MoveDownHotkey}] 移动选中\n" +
             $"[1 ~ 9] 快速粘贴第 1~9 条\n" +
             $"{globalPaste}\n" +
             $"[{s.TogglePinHotkey}] 窗口置顶（失焦不藏 / 粘贴不关）\n" +
