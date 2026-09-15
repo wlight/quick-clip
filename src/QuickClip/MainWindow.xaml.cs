@@ -19,6 +19,9 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private SettingsWindow? _settingsWindow;
     private bool _exiting;
+    /// <summary>磁贴列数（与 XAML 中 WrapPanel 的 ItemWidth / 窗口宽度对应），方向键按行移动。</summary>
+    private const int TileColumns = 2;
+
     /// <summary>热键唤起后短时忽略 Deactivated，避免 Activate 被前台锁拒绝时立刻 Hide。</summary>
     private DateTime _suppressDeactivateUntil = DateTime.MinValue;
     private DispatcherTimer? _hotkeyTopmostTimer;
@@ -62,7 +65,7 @@ public partial class MainWindow : FluentWindow
         _services.Tray.OpenDataFolderRequested += OpenDataFolderFromTray;
         _services.Tray.ClearTodayHistoryRequested += ClearTodayFromTray;
 
-        PositionWindow();
+        PositionWindowAtCursor();
 
         // 预览浮层：离开条目/浮层 280ms 后自动关闭
         _previewCloseTimer.Tick += (_, _) =>
@@ -244,6 +247,7 @@ public partial class MainWindow : FluentWindow
         if (IsVisible && !_exiting && !_services.Settings.WindowAlwaysOnTop &&
             QrOverlay.Visibility == Visibility.Collapsed &&
             OcrOverlay.Visibility == Visibility.Collapsed &&
+            !ItemMenuPopup.IsOpen &&
             !IsSettingsWindowOpen())
         {
             DebugLog.Log("失焦隐藏面板");
@@ -254,11 +258,6 @@ public partial class MainWindow : FluentWindow
     /// <summary>设置窗口是否正在显示（含刚激活、主窗暂失焦的情况）。</summary>
     private bool IsSettingsWindowOpen() =>
         _settingsWindow is { IsVisible: true };
-
-    private void OnTitleBarCloseClicked(object sender, RoutedEventArgs e)
-    {
-        Hide();
-    }
 
     /// <summary>唤起 / 切换窗口（可由键盘钩子或托盘触发）。</summary>
     private void ToggleWindow()
@@ -284,11 +283,12 @@ public partial class MainWindow : FluentWindow
     {
         // 记录唤起前的目标窗口，用于粘贴回填
         _services.Paste.RememberTargetWindow();
-        PositionWindow();
+        PositionWindowAtCursor();
         // 钩子/RegisterHotKey 唤起不算“进程收到用户输入”，前台锁会让 Activate 失败并立刻 Deactivated。
         // Activated 里曾经清掉宽限，导致约 1 秒后失焦把刚唤起的面板藏回托盘。
         _suppressDeactivateUntil = DateTime.UtcNow.AddMilliseconds(1500);
         Show();
+        PlayShowAnimation();
         Activate();
 
         // 每次打开都默认选中第 1 条（最近一条），Enter 即贴
@@ -359,6 +359,7 @@ public partial class MainWindow : FluentWindow
     {
         _hotkeyTopmostTimer?.Stop();
         PreviewPopup.IsOpen = false;
+        ItemMenuPopup.IsOpen = false;
         Hide();
         DebugLog.Log("窗口已隐藏");
     }
@@ -390,17 +391,29 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>
-    /// 主面板停靠到当前显示器工作区右侧并垂直居中（仿 Win+V）。
-    /// 小分辨率时收缩宽高，避免超出屏幕。
+    /// 面板在光标处浮出（仿 Win11 剪贴板历史弹窗）：默认落在光标右下方，
+    /// 右边或下边放不下时翻到光标左侧 / 上方，最后钳制在光标所在显示器的工作区内。
     /// </summary>
-    private void PositionWindow()
+    private void PositionWindowAtCursor()
     {
-        var workArea = GetWindowWorkArea();
-        const double margin = 12;
+        const double margin = 8;
+        const double cursorOffsetX = 14;
+        const double cursorOffsetY = 16;
+
+        var cursor = System.Windows.Forms.Cursor.Position;
+        var screen = System.Windows.Forms.Screen.FromPoint(cursor);
+        GetDpiScale(out double dpiX, out double dpiY);
+
+        var bounds = screen.WorkingArea;
+        var workArea = new System.Windows.Rect(
+            bounds.Left / dpiX,
+            bounds.Top / dpiY,
+            bounds.Width / dpiX,
+            bounds.Height / dpiY);
 
         // 小屏：限制高度 / 宽度（DIP，已按 DPI 换算）
-        double maxHeight = Math.Max(360, workArea.Height - margin * 2);
-        double maxWidth = Math.Max(320, workArea.Width - margin * 2);
+        double maxHeight = Math.Max(MinHeight, workArea.Height - margin * 2);
+        double maxWidth = Math.Max(MinWidth, workArea.Width - margin * 2);
         if (Height > maxHeight)
         {
             Height = maxHeight;
@@ -411,12 +424,50 @@ public partial class MainWindow : FluentWindow
             Width = maxWidth;
         }
 
-        Left = workArea.Right - Width - margin;
-        Top = workArea.Top + (workArea.Height - Height) / 2;
+        double cursorX = cursor.X / dpiX;
+        double cursorY = cursor.Y / dpiY;
+
+        double left = cursorX + cursorOffsetX;
+        if (left + Width > workArea.Right - margin)
+        {
+            left = cursorX - Width - cursorOffsetX;
+        }
+
+        double top = cursorY + cursorOffsetY;
+        if (top + Height > workArea.Bottom - margin)
+        {
+            top = cursorY - Height - cursorOffsetY;
+        }
 
         // 钳制在工作区内（多显示器 / 极端 DPI）
-        Left = Math.Clamp(Left, workArea.Left + margin, Math.Max(workArea.Left + margin, workArea.Right - Width - margin));
-        Top = Math.Clamp(Top, workArea.Top + margin, Math.Max(workArea.Top + margin, workArea.Bottom - Height - margin));
+        Left = Math.Clamp(left, workArea.Left + margin, Math.Max(workArea.Left + margin, workArea.Right - Width - margin));
+        Top = Math.Clamp(top, workArea.Top + margin, Math.Max(workArea.Top + margin, workArea.Bottom - Height - margin));
+
+        DebugLog.Log($"面板定位到光标: cursor=({cursorX:F0},{cursorY:F0}) -> ({Left:F0},{Top:F0}) size={Width:F0}x{Height:F0}");
+    }
+
+    /// <summary>
+    /// 浮出动画：淡入 + 8px 上浮（约 150ms），对齐 Win11 弹窗的出场观感。
+    /// </summary>
+    private void PlayShowAnimation()
+    {
+        var transform = new System.Windows.Media.TranslateTransform(0, 8);
+        RootGrid.RenderTransform = transform;
+
+        var duration = TimeSpan.FromMilliseconds(150);
+        var ease = new System.Windows.Media.Animation.QuadraticEase
+        {
+            EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+        };
+
+        Opacity = 0;
+        BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1, duration)
+        {
+            EasingFunction = ease
+        });
+        transform.BeginAnimation(
+            System.Windows.Media.TranslateTransform.YProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(8, 0, duration) { EasingFunction = ease });
     }
 
     private void OnWindowKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -490,7 +541,7 @@ public partial class MainWindow : FluentWindow
                 return;
             }
 
-            MoveSelection(1);
+            MoveSelection(TileColumns);
             e.Handled = true;
             return;
         }
@@ -503,7 +554,7 @@ public partial class MainWindow : FluentWindow
                 return;
             }
 
-            MoveSelection(-1);
+            MoveSelection(-TileColumns);
             e.Handled = true;
             return;
         }
@@ -546,12 +597,12 @@ public partial class MainWindow : FluentWindow
 
         if (settings.MoveDownHotkey.Matches(key, modifiers))
         {
-            MoveSelection(1);
+            MoveSelection(TileColumns);
             e.Handled = true;
         }
         else if (settings.MoveUpHotkey.Matches(key, modifiers))
         {
-            MoveSelection(-1);
+            MoveSelection(-TileColumns);
             e.Handled = true;
         }
     }
@@ -829,6 +880,23 @@ public partial class MainWindow : FluentWindow
             {
                 return;
             }
+        }
+
+        // 尚未上屏（首帧前 PresentationSource 为空）：退回 WPF 视觉 DPI，
+        // 否则按 100% 估算会让高 DPI 屏上的首次定位偏移。
+        try
+        {
+            System.Windows.DpiScale dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this);
+            if (dpi.DpiScaleX > 0 && dpi.DpiScaleY > 0)
+            {
+                dpiX = dpi.DpiScaleX;
+                dpiY = dpi.DpiScaleY;
+                return;
+            }
+        }
+        catch
+        {
+            // 不在视觉树上时忽略，走下面的兜底值
         }
 
         dpiX = 1.0;
@@ -1253,6 +1321,56 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // ---------- 条目「…」菜单 ----------
+
+    /// <summary>磁贴「…」：把菜单挂到按钮上（上下自动避让），DataContext 指向该条目。</summary>
+    private void OnItemMenuClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement target || GetCardViewModel(sender) is not { } vm)
+        {
+            return;
+        }
+
+        _viewModel.SelectedItem = vm;
+        ItemMenuPopup.DataContext = vm;
+        ItemMenuPopup.PlacementTarget = target;
+
+        // 屏幕下半部分的磁贴向上弹，避免菜单超出工作区
+        System.Windows.Point topLeft = target.PointToScreen(new System.Windows.Point(0, 0));
+        var screen = System.Windows.Forms.Screen.FromPoint(
+            new System.Drawing.Point((int)topLeft.X, (int)topLeft.Y));
+        var workArea = screen.WorkingArea;
+        ItemMenuPopup.Placement = topLeft.Y > workArea.Top + workArea.Height / 2.0
+            ? System.Windows.Controls.Primitives.PlacementMode.Top
+            : System.Windows.Controls.Primitives.PlacementMode.Bottom;
+
+        ItemMenuPopup.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>菜单内任一动作执行后收起菜单（Click 冒泡到菜单根，晚于子按钮处理器）。</summary>
+    private void OnItemMenuActionClicked(object sender, RoutedEventArgs e) => ItemMenuPopup.IsOpen = false;
+
+    /// <summary>菜单关闭后：面板已失焦则按「失焦即隐」规则收起。</summary>
+    private void OnItemMenuClosed(object? sender, EventArgs e)
+    {
+        if (IsVisible && !_exiting && !IsActive &&
+            !_services.Settings.WindowAlwaysOnTop && !IsSettingsWindowOpen())
+        {
+            HideWindow();
+        }
+    }
+
+    /// <summary>菜单「粘贴到当前窗口」：先选中该条目再走统一粘贴路径。</summary>
+    private void OnPasteFromMenuClicked(object sender, RoutedEventArgs e)
+    {
+        if (GetCardViewModel(sender) is { } vm)
+        {
+            _viewModel.SelectedItem = vm;
+            PasteSelected(plainOnly: false);
+        }
+    }
+
     private static ClipboardItemViewModel? GetCardViewModel(object sender)
     {
         return sender is FrameworkElement { DataContext: ClipboardItemViewModel vm } ? vm : null;
@@ -1368,7 +1486,7 @@ public partial class MainWindow : FluentWindow
             : $"[{s.PlainPasteHotkey}] 全局纯文本粘贴（未启用）";
 
         string body =
-            $"单击选中 · 双击粘贴 · 卡片「复制」或 [{s.CopySelectedHotkey}] 仅复制\n" +
+            $"单击选中 · 双击粘贴 · 条目「…」菜单或 [{s.CopySelectedHotkey}] 仅复制\n" +
             $"[{s.PasteSelectedHotkey}] 粘贴选中项\n" +
             $"[{s.PasteSelectedPlainHotkey}] 纯文本粘贴选中项\n" +
             $"[1 ~ 9] 快速粘贴第 1~9 条\n" +

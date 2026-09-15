@@ -14,8 +14,37 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AppServices _services;
     private CancellationTokenSource? _searchDebounce;
 
+    /// <summary>
+    /// 面板一次最多渲染的磁贴数：磁贴网格用 WrapPanel（WPF 无内置虚拟化网格），
+    /// 条目过多时一次性解码缩略图会拖慢浮出，超出部分靠搜索/筛选定位。
+    /// </summary>
+    public const int MaxRenderedTiles = 150;
+
     /// <summary>当前展示的卡片列表。</summary>
     public ObservableCollection<ClipboardItemViewModel> Items { get; } = new();
+
+    private bool _isTruncated;
+
+    /// <summary>命中条目超过渲染上限（列表尾部被截断）。</summary>
+    public bool IsTruncated
+    {
+        get => _isTruncated;
+        private set
+        {
+            if (_isTruncated == value)
+            {
+                return;
+            }
+
+            _isTruncated = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TruncatedVisibility));
+        }
+    }
+
+    public Visibility TruncatedVisibility => IsTruncated ? Visibility.Visible : Visibility.Collapsed;
+
+    public string TruncatedHint => $"仅显示最近 {MaxRenderedTiles} 条，更早的记录请用搜索";
 
     private string _searchText = string.Empty;
     public string SearchText
@@ -169,6 +198,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             .Where(i => SearchService.IsMatch(i, query))
             .ToList();
 
+        bool truncated = filtered.Count > MaxRenderedTiles;
+        if (truncated)
+        {
+            filtered = filtered.Take(MaxRenderedTiles).ToList();
+        }
+
         await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
         {
             Items.Clear();
@@ -191,6 +226,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             // 默认选中第 1 条（最近一条），便于 Enter 即贴
             SelectedItem = reselect ?? (Items.Count > 0 ? Items[0] : null);
             IsEmpty = Items.Count == 0;
+            IsTruncated = truncated;
             OnPropertyChanged(nameof(EmptyHint));
         });
     }
