@@ -106,4 +106,4 @@ jobs:
             | --- | --- |
             | `QuickClip-Setup-win-x64.exe` | 安装版（体积小，需 [.NET 8 桌面运行时 x64](https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe)） |
 
-            详细变更见 [CHANGELOG.md](https://github.com/soldier-cv/quick-clip/blob/master/CHANGELOG.md)。
+            详细变更见 [CHANGELOG.md](https://github.com/wlight/quick-clip/blob/master/CHANGELOG.md)。

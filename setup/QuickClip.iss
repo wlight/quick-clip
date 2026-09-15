@@ -6,7 +6,7 @@
   #define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "soldier-cv"
-#define MyAppURL "https://github.com/soldier-cv/quick-clip"
+#define MyAppURL "https://github.com/wlight/quick-clip"
 #define MyAppExeName "QuickClip.exe"
 
 [Setup]

@@ -5,7 +5,7 @@ Windows 平台极速、纯净的本地剪贴板管理工具。基于 .NET 8 与 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6.svg)](docs/COMPATIBILITY.md)
-[![Platform](https://img.shields.io/badge/Platform-Win--x64-gray.svg)](https://github.com/soldier-cv/quick-clip/releases)
+[![Platform](https://img.shields.io/badge/Platform-Win--x64-gray.svg)](https://github.com/wlight/quick-clip/releases)
 
 <p align="center">
   <img src="docs/assets/preview.png" width="560" alt="QuickClip 主面板预览">
@@ -86,7 +86,7 @@ Windows 平台极速、纯净的本地剪贴板管理工具。基于 .NET 8 与 
 
 ### 预编译安装包
 
-前往 [GitHub Releases](https://github.com/soldier-cv/quick-clip/releases) 页面下载最新版本：
+前往 [GitHub Releases](https://github.com/wlight/quick-clip/releases) 页面下载最新版本：
 
 | 安装包 | 说明 | 运行前置条件 |
 | :--- | :--- | :--- |
