@@ -101,6 +101,8 @@ public sealed class SettingsService
     public HotkeyBinding HidePanelHotkey { get; private set; } = HotkeyBinding.HidePanelDefault;
     public HotkeyBinding MoveUpHotkey { get; private set; } = HotkeyBinding.MoveUpDefault;
     public HotkeyBinding MoveDownHotkey { get; private set; } = HotkeyBinding.MoveDownDefault;
+    public HotkeyBinding MoveLeftHotkey { get; private set; } = HotkeyBinding.MoveLeftDefault;
+    public HotkeyBinding MoveRightHotkey { get; private set; } = HotkeyBinding.MoveRightDefault;
 
     public SettingsService(string settingsPath)
     {
@@ -282,6 +284,10 @@ public sealed class SettingsService
             MoveUpHotkey = up;
         if (data.MoveDown?.ToBinding() is { HasKey: true } down)
             MoveDownHotkey = down;
+        if (data.MoveLeft?.ToBinding() is { HasKey: true } left)
+            MoveLeftHotkey = left;
+        if (data.MoveRight?.ToBinding() is { HasKey: true } right)
+            MoveRightHotkey = right;
     }
 
     /// <summary>启用/禁用全局纯文本粘贴（组合固定 Ctrl+Shift+V）。</summary>
@@ -355,6 +361,12 @@ public sealed class SettingsService
             case PanelHotkeyAction.MoveDown:
                 MoveDownHotkey = binding;
                 break;
+            case PanelHotkeyAction.MoveLeft:
+                MoveLeftHotkey = binding;
+                break;
+            case PanelHotkeyAction.MoveRight:
+                MoveRightHotkey = binding;
+                break;
         }
 
         Save();
@@ -371,6 +383,8 @@ public sealed class SettingsService
         HidePanelHotkey = HotkeyBinding.HidePanelDefault;
         MoveUpHotkey = HotkeyBinding.MoveUpDefault;
         MoveDownHotkey = HotkeyBinding.MoveDownDefault;
+        MoveLeftHotkey = HotkeyBinding.MoveLeftDefault;
+        MoveRightHotkey = HotkeyBinding.MoveRightDefault;
         Save();
     }
 
@@ -384,6 +398,8 @@ public sealed class SettingsService
         PanelHotkeyAction.HidePanel => HidePanelHotkey,
         PanelHotkeyAction.MoveUp => MoveUpHotkey,
         PanelHotkeyAction.MoveDown => MoveDownHotkey,
+        PanelHotkeyAction.MoveLeft => MoveLeftHotkey,
+        PanelHotkeyAction.MoveRight => MoveRightHotkey,
         _ => HotkeyBinding.PasteSelectedDefault
     };
 
@@ -397,6 +413,8 @@ public sealed class SettingsService
         PanelHotkeyAction.HidePanel => HotkeyBinding.HidePanelDefault,
         PanelHotkeyAction.MoveUp => HotkeyBinding.MoveUpDefault,
         PanelHotkeyAction.MoveDown => HotkeyBinding.MoveDownDefault,
+        PanelHotkeyAction.MoveLeft => HotkeyBinding.MoveLeftDefault,
+        PanelHotkeyAction.MoveRight => HotkeyBinding.MoveRightDefault,
         _ => HotkeyBinding.PasteSelectedDefault
     };
 
@@ -657,7 +675,9 @@ public sealed class SettingsService
                     DeleteSelected = HotkeyData.FromBinding(DeleteSelectedHotkey),
                     HidePanel = HotkeyData.FromBinding(HidePanelHotkey),
                     MoveUp = HotkeyData.FromBinding(MoveUpHotkey),
-                    MoveDown = HotkeyData.FromBinding(MoveDownHotkey)
+                    MoveDown = HotkeyData.FromBinding(MoveDownHotkey),
+                    MoveLeft = HotkeyData.FromBinding(MoveLeftHotkey),
+                    MoveRight = HotkeyData.FromBinding(MoveRightHotkey)
                 }
             };
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(dto, JsonOptions));
@@ -714,6 +734,8 @@ public sealed class PanelHotkeysData
     public HotkeyData? HidePanel { get; set; }
     public HotkeyData? MoveUp { get; set; }
     public HotkeyData? MoveDown { get; set; }
+    public HotkeyData? MoveLeft { get; set; }
+    public HotkeyData? MoveRight { get; set; }
 }
 
 /// <summary>热键的 JSON 表示（人类可读的字符串形式）。</summary>

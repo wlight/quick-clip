@@ -1069,6 +1069,8 @@ public partial class SettingsWindow : Window
         "HidePanel" => "隐藏面板",
         "MoveUp" => "选中上一项",
         "MoveDown" => "选中下一项",
+        "MoveLeft" => "选中左侧一项",
+        "MoveRight" => "选中右侧一项",
         _ => "快捷键"
     };
 
@@ -1082,6 +1084,8 @@ public partial class SettingsWindow : Window
         PanelHotkeyAction.HidePanel => "隐藏面板",
         PanelHotkeyAction.MoveUp => "选中上一项",
         PanelHotkeyAction.MoveDown => "选中下一项",
+        PanelHotkeyAction.MoveLeft => "选中左侧一项",
+        PanelHotkeyAction.MoveRight => "选中右侧一项",
         _ => action.ToString()
     };
 }

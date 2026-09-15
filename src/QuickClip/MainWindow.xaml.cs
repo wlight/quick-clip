@@ -19,8 +19,8 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private SettingsWindow? _settingsWindow;
     private bool _exiting;
-    /// <summary>磁贴列数（与 XAML 中 WrapPanel 的 ItemWidth / 窗口宽度对应），方向键按行移动。</summary>
-    private const int TileColumns = 2;
+    /// <summary>磁贴列数兜底值（WrapPanel 尚未完成布局时用）：窗口宽 420、磁贴宽 190 → 2 列。</summary>
+    private const int DefaultTileColumns = 2;
 
     /// <summary>热键唤起后短时忽略 Deactivated，避免 Activate 被前台锁拒绝时立刻 Hide。</summary>
     private DateTime _suppressDeactivateUntil = DateTime.MinValue;
@@ -533,31 +533,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        if (settings.MoveDownHotkey.Matches(key, modifiers))
-        {
-            // 焦点在搜索框时由 PreviewKeyDown 提前处理，避免重复移动
-            if (IsSearchFocused())
-            {
-                return;
-            }
-
-            MoveSelection(TileColumns);
-            e.Handled = true;
-            return;
-        }
-
-        if (settings.MoveUpHotkey.Matches(key, modifiers))
-        {
-            // 焦点在搜索框时由 PreviewKeyDown 提前处理，避免重复移动
-            if (IsSearchFocused())
-            {
-                return;
-            }
-
-            MoveSelection(-TileColumns);
-            e.Handled = true;
-            return;
-        }
+        // 方向键不在此处理：见 OnWindowPreviewKeyDown，隧道阶段先于 ListBox / TextBox 接管
 
         // 1~9 / 小键盘：固定快速粘贴
         if (modifiers == ModifierKeys.None && !IsSearchFocused())
@@ -578,13 +554,22 @@ public partial class MainWindow : FluentWindow
     private static bool IsSearchFocused() => Keyboard.FocusedElement is System.Windows.Controls.TextBox;
 
     /// <summary>
-    /// 焦点在搜索框时，TextBox 会在 KeyDown 冒泡到窗口前把 ↑/↓ 吞掉（内部标记 Handled），
-    /// 导致窗口 KeyDown 收不到方向键、列表选中无法移动。这里在 PreviewKeyDown 隧道阶段
-    /// （先于控件处理）拦截方向键移动列表选中；普通字符不匹配，仍正常输入搜索框。
+    /// 方向键统一在 PreviewKeyDown（隧道阶段，先于控件处理）接管：
+    /// 搜索框聚焦时 TextBox 会在 KeyDown 冒泡到窗口前吞掉 ↑/↓，列表聚焦时 ListBox 自带的
+    /// 焦点导航又会抢走 ←/→（表现为两列布局下只能上下、不能左右）。
+    /// ↑/↓ 按行移动，←/→ 同行左右移动；搜索框内的 ←/→ 仅在光标抵边界且无选区时才接管为列表移动，
+    /// 其余情况仍交还文本框移动光标，普通字符不匹配、照常输入。
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (!IsSearchFocused())
+        if (e.Handled)
+        {
+            return;
+        }
+
+        // 二维码 / OCR 浮层打开时方向键留给浮层，不去动背后的列表
+        if (QrOverlay.Visibility == Visibility.Visible ||
+            OcrOverlay.Visibility == Visibility.Visible)
         {
             return;
         }
@@ -595,14 +580,58 @@ public partial class MainWindow : FluentWindow
                         (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift | ModifierKeys.Windows);
         var settings = _services.Settings;
 
+        if (ReferenceEquals(Keyboard.FocusedElement, SearchBox))
+        {
+            if (settings.MoveDownHotkey.Matches(key, modifiers))
+            {
+                MoveSelectionByRow(1);
+                e.Handled = true;
+            }
+            else if (settings.MoveUpHotkey.Matches(key, modifiers))
+            {
+                MoveSelectionByRow(-1);
+                e.Handled = true;
+            }
+            else if (settings.MoveLeftHotkey.Matches(key, modifiers) &&
+                     SearchBox.SelectionLength == 0 && SearchBox.CaretIndex <= 0)
+            {
+                MoveSelectionInRow(-1);
+                e.Handled = true;
+            }
+            else if (settings.MoveRightHotkey.Matches(key, modifiers) &&
+                     SearchBox.SelectionLength == 0 && SearchBox.CaretIndex >= SearchBox.Text.Length)
+            {
+                MoveSelectionInRow(1);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        // 其它文本框（如 OCR 浮层的多行框）：方向键留给文本编辑
+        if (Keyboard.FocusedElement is System.Windows.Controls.TextBox)
+        {
+            return;
+        }
+
         if (settings.MoveDownHotkey.Matches(key, modifiers))
         {
-            MoveSelection(TileColumns);
+            MoveSelectionByRow(1);
             e.Handled = true;
         }
         else if (settings.MoveUpHotkey.Matches(key, modifiers))
         {
-            MoveSelection(-TileColumns);
+            MoveSelectionByRow(-1);
+            e.Handled = true;
+        }
+        else if (settings.MoveRightHotkey.Matches(key, modifiers))
+        {
+            MoveSelectionInRow(1);
+            e.Handled = true;
+        }
+        else if (settings.MoveLeftHotkey.Matches(key, modifiers))
+        {
+            MoveSelectionInRow(-1);
             e.Handled = true;
         }
     }
@@ -635,6 +664,45 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    /// <summary>当前每行的磁贴列数：WrapPanel 实宽 ÷ 磁贴宽（含外边距），未完成布局时用兜底值。</summary>
+    private int GetTileColumns()
+    {
+        if (ItemList.ItemsPanelRoot is WrapPanel panel && panel.ItemWidth > 0 && panel.ActualWidth > 0)
+        {
+            return Math.Max(1, (int)Math.Floor(panel.ActualWidth / panel.ItemWidth));
+        }
+
+        return DefaultTileColumns;
+    }
+
+    /// <summary>↑ / ↓：整行移动，列号保持不变。</summary>
+    private void MoveSelectionByRow(int rowDelta) => MoveSelection(rowDelta * GetTileColumns());
+
+    /// <summary>← / →：同行内左右移动；行首 / 行尾不折返到相邻行。</summary>
+    private void MoveSelectionInRow(int columnDelta)
+    {
+        if (_viewModel.Items.Count == 0)
+        {
+            return;
+        }
+
+        int columns = GetTileColumns();
+        int column = CurrentSelectionIndex() % columns;
+        int targetColumn = column + columnDelta;
+        if (targetColumn < 0 || targetColumn >= columns)
+        {
+            return;
+        }
+
+        MoveSelection(columnDelta);
+    }
+
+    /// <summary>选中项在列表中的下标；未选中时视为第 1 项。</summary>
+    private int CurrentSelectionIndex() =>
+        _viewModel.SelectedItem == null
+            ? 0
+            : Math.Max(0, _viewModel.Items.IndexOf(_viewModel.SelectedItem));
+
     private void MoveSelection(int delta)
     {
         if (_viewModel.Items.Count == 0)
@@ -642,10 +710,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        int current = _viewModel.SelectedItem == null
-            ? 0
-            : _viewModel.Items.IndexOf(_viewModel.SelectedItem);
-        int target = Math.Clamp(current + delta, 0, _viewModel.Items.Count - 1);
+        int target = Math.Clamp(CurrentSelectionIndex() + delta, 0, _viewModel.Items.Count - 1);
         _viewModel.SelectedItem = _viewModel.Items[target];
         ItemList.ScrollIntoView(_viewModel.SelectedItem);
     }
@@ -1489,6 +1554,7 @@ public partial class MainWindow : FluentWindow
             $"单击选中 · 双击粘贴 · 条目「…」菜单或 [{s.CopySelectedHotkey}] 仅复制\n" +
             $"[{s.PasteSelectedHotkey}] 粘贴选中项\n" +
             $"[{s.PasteSelectedPlainHotkey}] 纯文本粘贴选中项\n" +
+            $"[{s.MoveUpHotkey} {s.MoveDownHotkey} {s.MoveLeftHotkey} {s.MoveRightHotkey}] 移动选中（↑↓ 跨行 / ←→ 同行）\n" +
             $"[1 ~ 9] 快速粘贴第 1~9 条\n" +
             $"{globalPaste}\n" +
             $"[{s.TogglePinHotkey}] 窗口置顶（失焦不藏 / 粘贴不关）\n" +

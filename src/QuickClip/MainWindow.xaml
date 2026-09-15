@@ -47,25 +47,50 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <Grid Grid.Column="0">
-                <ui:TextBox x:Name="SearchBox"
-                            Height="34"
-                            Padding="30,4,10,4"
-                            VerticalContentAlignment="Center"
-                            PlaceholderText="搜索剪贴板内容（支持拼音首字母）"
-                            Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                            Background="{DynamicResource Theme.Search}"
-                            BorderBrush="{DynamicResource Theme.Border}"
-                            BorderThickness="1"
-                            Foreground="{DynamicResource Theme.Text}" />
-                <ui:SymbolIcon Symbol="Search24"
-                               FontSize="14"
-                               Margin="9,0,0,0"
-                               HorizontalAlignment="Left"
-                               VerticalAlignment="Center"
-                               IsHitTestVisible="False"
-                               Foreground="{DynamicResource Theme.TextMuted}" />
-            </Grid>
+            <!--
+              搜索框外框由这一层 Border 单独绘制：内层 ui:TextBox 去底色去边框后只负责输入，
+              放大镜与文本框按列排布（而非绝对定位叠放），占位文字与描边不会互相错位。
+            -->
+            <Border Grid.Column="0"
+                    Height="34"
+                    CornerRadius="6"
+                    Background="{DynamicResource Theme.Search}"
+                    BorderThickness="1">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Border}" />
+                        <Style.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource Theme.Accent}" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <ui:SymbolIcon Grid.Column="0"
+                                   Symbol="Search24"
+                                   FontSize="14"
+                                   Margin="9,0,7,0"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Foreground="{DynamicResource Theme.TextMuted}" />
+
+                    <ui:TextBox x:Name="SearchBox"
+                                Grid.Column="1"
+                                Padding="0"
+                                VerticalContentAlignment="Center"
+                                PlaceholderText="搜索剪贴板内容（支持拼音首字母）"
+                                Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Foreground="{DynamicResource Theme.Text}" />
+                </Grid>
+            </Border>
 
             <ComboBox Grid.Column="1"
                       Width="82"
