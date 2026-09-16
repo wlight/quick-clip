@@ -90,8 +90,6 @@
                                     Padding="0"
                                     VerticalContentAlignment="Center"
                                     PlaceholderText="搜索剪贴板内容"
-                                    ToolTip="支持拼音首字母搜索（如 qq 匹配 QQ）"
-                                    ToolTipService.Placement="Bottom"
                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                     Background="Transparent"
                                     BorderThickness="0"

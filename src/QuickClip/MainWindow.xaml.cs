@@ -1673,6 +1673,7 @@ public partial class MainWindow : FluentWindow
             $"[{s.PasteSelectedPlainHotkey}] 纯文本粘贴选中项\n" +
             $"[{s.MoveUpHotkey} {s.MoveDownHotkey} {s.MoveLeftHotkey} {s.MoveRightHotkey}] 移动选中\n" +
             $"[1 ~ 9] 快速粘贴第 1~9 条\n" +
+            "[搜索框] 支持拼音首字母，如 qq 匹配 QQ\n" +
             $"{globalPaste}\n" +
             $"[{s.TogglePinHotkey}] 窗口置顶（失焦不藏 / 粘贴不关）\n" +
             $"[{s.HidePanelHotkey}] 隐藏  ·  [{s.DeleteSelectedHotkey}] 删除\n" +
