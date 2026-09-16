@@ -91,6 +91,7 @@
                                     VerticalContentAlignment="Center"
                                     PlaceholderText="搜索剪贴板内容"
                                     ToolTip="支持拼音首字母搜索（如 qq 匹配 QQ）"
+                                    ToolTipService.Placement="Bottom"
                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                     Background="Transparent"
                                     BorderThickness="0"
@@ -99,9 +100,14 @@
                 </Border>
             </Grid>
 
+            <!--
+              宽度 86 是给 WPF-UI 的 ComboBox 模板留出「左内边距 + 文字 + 右侧箭头」三段的余量：
+              74 时「全部」会贴到箭头上，看起来像被遮挡。右侧还有整段留白，多这 12px 不影响搜索框。
+            -->
             <ComboBox Grid.Column="1"
-                      Width="74"
+                      Width="86"
                       Height="34"
+                      Padding="10,0"
                       Margin="6,0,0,0"
                       VerticalContentAlignment="Center"
                       SelectedIndex="{Binding FilterIndex}"
@@ -118,6 +124,7 @@
                        Grid.Column="2"
                        Width="34"
                        Height="34"
+                       Padding="0"
                        Margin="6,0,0,0"
                        Appearance="Transparent"
                        CornerRadius="6"
