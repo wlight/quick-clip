@@ -168,6 +168,7 @@ public partial class SettingsWindow : Window
 
             AutoStartCheck.IsChecked = s.AutoStart;
             AutoCheckUpdatesCheck.IsChecked = s.AutoCheckUpdates;
+            PanelFollowCursorCheck.IsChecked = s.PanelFollowCursor;
             TextOnlyCheck.IsChecked = s.TextOnlyCapture;
             ChannelText.Text = "当前渠道：" + UpdateService.ChannelLabel;
             MaxHistoryBox.Text = s.MaxHistoryItems.ToString();
@@ -416,6 +417,21 @@ public partial class SettingsWindow : Window
         }
 
         _services.Settings.SetAutoStart(AutoStartCheck.IsChecked == true);
+    }
+
+    /// <summary>「面板在鼠标处浮出」开关：取消后固定在最近一次拖动的位置（坐标已在拖动时记下）。</summary>
+    private void OnPanelFollowCursorToggled(object sender, RoutedEventArgs e)
+    {
+        if (_suppressUiEvents)
+        {
+            return;
+        }
+
+        var settings = _services.Settings;
+        settings.SetPanelPlacement(
+            PanelFollowCursorCheck.IsChecked == true,
+            settings.PanelLeft,
+            settings.PanelTop);
     }
 
     private void OnAutoCheckUpdatesToggled(object sender, RoutedEventArgs e)

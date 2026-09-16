@@ -368,6 +368,13 @@
                                   Content="自动检查并下载更新"
                                   Checked="OnAutoCheckUpdatesToggled"
                                   Unchecked="OnAutoCheckUpdatesToggled" />
+                        <CheckBox x:Name="PanelFollowCursorCheck"
+                                  Margin="0,10,0,0"
+                                  Foreground="{DynamicResource Theme.TextSecondary}"
+                                  FontSize="13"
+                                  Content="面板在鼠标处浮出（取消则固定在拖动后的位置）"
+                                  Checked="OnPanelFollowCursorToggled"
+                                  Unchecked="OnPanelFollowCursorToggled" />
                     </StackPanel>
                 </Border>
 

@@ -76,6 +76,15 @@ public sealed class SettingsService
     /// <summary>上次静默检查时间（UTC）。用于 24 小时节流。</summary>
     public DateTime? LastUpdateCheckUtc { get; private set; }
 
+    /// <summary>面板在鼠标处浮出（默认）。拖动过面板后置 false：改为固定在拖动后的位置。</summary>
+    public bool PanelFollowCursor { get; private set; } = true;
+
+    /// <summary>拖动后面板的位置（DIP，屏幕坐标）；没拖过为 null。</summary>
+    public double? PanelLeft { get; private set; }
+
+    /// <inheritdoc cref="PanelLeft"/>
+    public double? PanelTop { get; private set; }
+
     public const int DefaultMaxHistoryItems = 233;
     public const int MinMaxHistoryItems = 50;
     public const int AbsoluteMaxHistoryItems = 2000;
@@ -153,6 +162,9 @@ public sealed class SettingsService
             TextOnlyCapture = dto.TextOnlyCapture ?? false;
             AutoCheckUpdates = dto.AutoCheckUpdates ?? false;
             LastUpdateCheckUtc = ParseUtc(dto.LastUpdateCheckUtc);
+            PanelFollowCursor = dto.PanelFollowCursor ?? true;
+            PanelLeft = dto.PanelLeft;
+            PanelTop = dto.PanelTop;
             MaxHistoryItems = ClampMaxHistory(dto.MaxHistoryItems ?? DefaultMaxHistoryItems);
 
             ApplyPanelHotkeys(dto.PanelHotkeys);
@@ -232,6 +244,25 @@ public sealed class SettingsService
         }
 
         AutoCheckUpdates = enabled;
+        Save();
+    }
+
+    /// <summary>
+    /// 记录面板摆放：拖动结束时调用。<paramref name="followCursor"/> 为 false 表示「固定在我放的位置」，
+    /// 坐标与标志一起落盘，只存一次盘、只广播一次变更。
+    /// </summary>
+    public void SetPanelPlacement(bool followCursor, double? left, double? top)
+    {
+        if (PanelFollowCursor == followCursor &&
+            Nullable.Equals(PanelLeft, left) &&
+            Nullable.Equals(PanelTop, top))
+        {
+            return;
+        }
+
+        PanelFollowCursor = followCursor;
+        PanelLeft = left;
+        PanelTop = top;
         Save();
     }
 
@@ -666,6 +697,9 @@ public sealed class SettingsService
                 TextOnlyCapture = TextOnlyCapture,
                 AutoCheckUpdates = AutoCheckUpdates,
                 LastUpdateCheckUtc = LastUpdateCheckUtc?.ToUniversalTime().ToString("o"),
+                PanelFollowCursor = PanelFollowCursor,
+                PanelLeft = PanelLeft,
+                PanelTop = PanelTop,
                 PanelHotkeys = new PanelHotkeysData
                 {
                     PasteSelected = HotkeyData.FromBinding(PasteSelectedHotkey),
@@ -720,6 +754,9 @@ public sealed class SettingsData
     public bool? TextOnlyCapture { get; set; }
     public bool? AutoCheckUpdates { get; set; }
     public string? LastUpdateCheckUtc { get; set; }
+    public bool? PanelFollowCursor { get; set; }
+    public double? PanelLeft { get; set; }
+    public double? PanelTop { get; set; }
     public PanelHotkeysData? PanelHotkeys { get; set; }
 }
 

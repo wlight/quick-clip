@@ -44,9 +44,6 @@ public partial class MainWindow : FluentWindow
     private double _panelDragOriginLeft;
     private double _panelDragOriginTop;
 
-    /// <summary>本次运行内用户手动挪过面板：之后浮出不再回到光标处，只做工作区钳制。</summary>
-    private bool _panelMovedManually;
-
     /// <summary>本次唤起的时刻：宽限判定用它，避免把「刚浮出就被前台锁抢回」当成点外收起。</summary>
     private DateTime _shownAt = DateTime.MinValue;
 
@@ -593,10 +590,15 @@ public partial class MainWindow : FluentWindow
             Width = maxWidth;
         }
 
-        if (_panelMovedManually)
+        var settings = _services.Settings;
+        if (!settings.PanelFollowCursor &&
+            settings.PanelLeft is double savedLeft &&
+            settings.PanelTop is double savedTop)
         {
+            Left = savedLeft;
+            Top = savedTop;
             ClampPanelIntoWorkArea();
-            DebugLog.Log($"面板保持手动位置: ({Left:F0},{Top:F0}) size={Width:F0}x{Height:F0}");
+            DebugLog.Log($"面板浮出在拖动后的位置: ({Left:F0},{Top:F0}) size={Width:F0}x{Height:F0}");
             return;
         }
 
@@ -625,7 +627,8 @@ public partial class MainWindow : FluentWindow
     // ---------- 面板拖动 ----------
 
     /// <summary>
-    /// 按下先只「待命」，位移超过 <see cref="PanelDragThreshold"/> 才真的拖，避免点条目 / 点空白时误挪。
+    /// 按下先只「待命」，位移超过 <see cref="PanelDragThreshold"/> 才真的拖，避免点条目 / 点空白时误挪；
+    /// 松手后位置写进设置（<see cref="Services.SettingsService.PanelLeft"/>），下次浮出仍在原处。
     /// 只有空白处能起拖：卡片正文、搜索行留白、底部命令栏空白、四周留白都算空白；
     /// 搜索框、筛选下拉、各个按钮、滚动条上的按下保持原有行为。
     /// </summary>
@@ -694,9 +697,10 @@ public partial class MainWindow : FluentWindow
         }
 
         ClampPanelIntoWorkArea();
-        _panelMovedManually = true;
-        _viewModel.StatusText = "已移动面板（本次运行固定在此处）";
-        DebugLog.Log($"面板已手动拖动到 ({Left:F0},{Top:F0})，本次运行内不再跟随光标");
+        // 拖过即视为「固定在我放的位置」：写进设置，重启后仍从这里浮出（设置页可改回跟随鼠标）
+        _services.Settings.SetPanelPlacement(followCursor: false, Left, Top);
+        _viewModel.StatusText = "已固定在此处（设置里可改回跟随鼠标）";
+        DebugLog.Log($"面板已拖动到 ({Left:F0},{Top:F0})，已记住该位置并关闭跟随光标");
     }
 
     /// <summary>命中测试：起点必须是空白（没有落在交互控件上）才允许拖面板。</summary>
