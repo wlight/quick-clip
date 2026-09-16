@@ -31,6 +31,22 @@ public partial class MainWindow : FluentWindow
 
     private DispatcherTimer? _hotkeyTopmostTimer;
 
+    /// <summary>拖动判定阈值（DIP）：小于它按点击处理，避免点条目时误挪面板。</summary>
+    private const double PanelDragThreshold = 3;
+
+    /// <summary>已在空白处按下，等移动超过阈值才算拖动。</summary>
+    private bool _panelDragArmed;
+
+    /// <summary>正在拖动面板。</summary>
+    private bool _panelDragging;
+
+    private System.Windows.Point _panelDragOriginScreen;
+    private double _panelDragOriginLeft;
+    private double _panelDragOriginTop;
+
+    /// <summary>本次运行内用户手动挪过面板：之后浮出不再回到光标处，只做工作区钳制。</summary>
+    private bool _panelMovedManually;
+
     /// <summary>本次唤起的时刻：宽限判定用它，避免把「刚浮出就被前台锁抢回」当成点外收起。</summary>
     private DateTime _shownAt = DateTime.MinValue;
 
@@ -577,6 +593,13 @@ public partial class MainWindow : FluentWindow
             Width = maxWidth;
         }
 
+        if (_panelMovedManually)
+        {
+            ClampPanelIntoWorkArea();
+            DebugLog.Log($"面板保持手动位置: ({Left:F0},{Top:F0}) size={Width:F0}x{Height:F0}");
+            return;
+        }
+
         double cursorX = cursor.X / dpiX;
         double cursorY = cursor.Y / dpiY;
 
@@ -597,6 +620,136 @@ public partial class MainWindow : FluentWindow
         Top = Math.Clamp(top, workArea.Top + margin, Math.Max(workArea.Top + margin, workArea.Bottom - Height - margin));
 
         DebugLog.Log($"面板定位到光标: cursor=({cursorX:F0},{cursorY:F0}) -> ({Left:F0},{Top:F0}) size={Width:F0}x{Height:F0}");
+    }
+
+    // ---------- 面板拖动 ----------
+
+    /// <summary>
+    /// 按下先只「待命」，位移超过 <see cref="PanelDragThreshold"/> 才真的拖，避免点条目 / 点空白时误挪。
+    /// 只有空白处能起拖：卡片正文、搜索行留白、底部命令栏空白、四周留白都算空白；
+    /// 搜索框、筛选下拉、各个按钮、滚动条上的按下保持原有行为。
+    /// </summary>
+    private void OnWindowPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left || _panelDragging ||
+            !IsPanelDragSurface(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        _panelDragArmed = true;
+        _panelDragOriginScreen = PointToScreen(e.GetPosition(this));
+        _panelDragOriginLeft = Left;
+        _panelDragOriginTop = Top;
+    }
+
+    private void OnWindowPreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_panelDragArmed)
+        {
+            return;
+        }
+
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            // 按下后没收到抬起（鼠标去了别的窗口）：清掉待命，别让下一次按下顺势拖动
+            _panelDragArmed = false;
+            return;
+        }
+
+        var screen = PointToScreen(e.GetPosition(this));
+        double dx = screen.X - _panelDragOriginScreen.X;
+        double dy = screen.Y - _panelDragOriginScreen.Y;
+        if (!_panelDragging && Math.Abs(dx) < PanelDragThreshold && Math.Abs(dy) < PanelDragThreshold)
+        {
+            return;
+        }
+
+        if (!_panelDragging)
+        {
+            _panelDragging = true;
+            // 拖动期间收起悬停预览，别让浮层跟着飘
+            _previewCloseTimer.Stop();
+            PreviewPopup.IsOpen = false;
+            Mouse.Capture(this);
+        }
+
+        GetDpiScale(out double dpiX, out double dpiY);
+        Left = _panelDragOriginLeft + dx / dpiX;
+        Top = _panelDragOriginTop + dy / dpiY;
+    }
+
+    private void OnWindowPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _panelDragArmed = false;
+        if (!_panelDragging)
+        {
+            return;
+        }
+
+        _panelDragging = false;
+        if (Mouse.Captured == this)
+        {
+            Mouse.Capture(null);
+        }
+
+        ClampPanelIntoWorkArea();
+        _panelMovedManually = true;
+        _viewModel.StatusText = "已移动面板（本次运行固定在此处）";
+        DebugLog.Log($"面板已手动拖动到 ({Left:F0},{Top:F0})，本次运行内不再跟随光标");
+    }
+
+    /// <summary>命中测试：起点必须是空白（没有落在交互控件上）才允许拖面板。</summary>
+    private bool IsPanelDragSurface(DependencyObject? source)
+    {
+        DependencyObject? node = source;
+        while (node != null)
+        {
+            if (node is Window)
+            {
+                return true;
+            }
+
+            // 二维码 / OCR 浮层铺满窗口：打开时不让拖动，避免把对话框一起挪走
+            if (ReferenceEquals(node, QrOverlay) || ReferenceEquals(node, OcrOverlay))
+            {
+                return false;
+            }
+
+            if (node is System.Windows.Controls.Primitives.ButtonBase
+                or System.Windows.Controls.Primitives.TextBoxBase
+                or System.Windows.Controls.Primitives.ScrollBar
+                or System.Windows.Controls.Primitives.Thumb
+                or ComboBox
+                or ComboBoxItem)
+            {
+                return false;
+            }
+
+            node = VisualTreeHelper.GetParent(node);
+        }
+
+        return true;
+    }
+
+    /// <summary>把面板钳制在它当前所在显示器的工作区内（拖动结束与每次浮出时都调用）。</summary>
+    private void ClampPanelIntoWorkArea()
+    {
+        const double margin = 8;
+        GetDpiScale(out double dpiX, out double dpiY);
+
+        var center = new System.Drawing.Point(
+            (int)((Left + Width / 2) * dpiX),
+            (int)((Top + Height / 2) * dpiY));
+        var bounds = System.Windows.Forms.Screen.FromPoint(center).WorkingArea;
+
+        double left = bounds.Left / dpiX;
+        double top = bounds.Top / dpiY;
+        double right = bounds.Right / dpiX;
+        double bottom = bounds.Bottom / dpiY;
+
+        Left = Math.Clamp(Left, left + margin, Math.Max(left + margin, right - Width - margin));
+        Top = Math.Clamp(Top, top + margin, Math.Max(top + margin, bottom - Height - margin));
     }
 
     /// <summary>
@@ -857,6 +1010,12 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     private void OnCardMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
+        // 拖面板时别弹悬停预览，浮层会跟着飘
+        if (_panelDragging)
+        {
+            return;
+        }
+
         if (sender is not FrameworkElement { DataContext: ClipboardItemViewModel vm } card)
         {
             return;

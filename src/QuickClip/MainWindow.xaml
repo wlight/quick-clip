@@ -20,6 +20,9 @@
                  BorderThickness="1"
                  KeyDown="OnWindowKeyDown"
                  PreviewKeyDown="OnWindowPreviewKeyDown"
+                 PreviewMouseLeftButtonDown="OnWindowPreviewMouseLeftButtonDown"
+                 PreviewMouseMove="OnWindowPreviewMouseMove"
+                 PreviewMouseLeftButtonUp="OnWindowPreviewMouseLeftButtonUp"
                  Closing="OnWindowClosing"
                  Activated="OnWindowActivated"
                  Deactivated="OnWindowDeactivated">
