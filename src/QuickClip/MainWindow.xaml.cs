@@ -19,8 +19,6 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private SettingsWindow? _settingsWindow;
     private bool _exiting;
-    /// <summary>单列宽卡片布局下每行 1 项；改回 WrapPanel 网格时按实宽自动算列数。</summary>
-    private const int DefaultListColumns = 1;
 
     /// <summary>热键唤起后短时忽略 Deactivated，避免 Activate 被前台锁拒绝时立刻 Hide。</summary>
     private DateTime _suppressDeactivateUntil = DateTime.MinValue;
@@ -593,7 +591,7 @@ public partial class MainWindow : FluentWindow
     /// 方向键统一在 PreviewKeyDown（隧道阶段，先于控件处理）接管：
     /// 搜索框聚焦时 TextBox 会在 KeyDown 冒泡到窗口前吞掉 ↑/↓，列表聚焦时 ListBox 自带的
     /// 焦点导航又会抢走 ←/→（网格布局下表现为只能上下、不能左右）。
-    /// ↑/↓ 按行移动，←/→ 同行左右移动；搜索框内的 ←/→ 仅在光标抵边界且无选区时才接管为列表移动，
+    /// 单列列表下四个方向键都按条目移动；搜索框内的 ←/→ 仅在光标抵边界且无选区时才接管为列表移动，
     /// 其余情况仍交还文本框移动光标，普通字符不匹配、照常输入。
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -620,24 +618,24 @@ public partial class MainWindow : FluentWindow
         {
             if (settings.MoveDownHotkey.Matches(key, modifiers))
             {
-                MoveSelectionByRow(1);
+                MoveSelection(1);
                 e.Handled = true;
             }
             else if (settings.MoveUpHotkey.Matches(key, modifiers))
             {
-                MoveSelectionByRow(-1);
+                MoveSelection(-1);
                 e.Handled = true;
             }
             else if (settings.MoveLeftHotkey.Matches(key, modifiers) &&
                      SearchBox.SelectionLength == 0 && SearchBox.CaretIndex <= 0)
             {
-                MoveSelectionInRow(-1);
+                MoveSelection(-1);
                 e.Handled = true;
             }
             else if (settings.MoveRightHotkey.Matches(key, modifiers) &&
                      SearchBox.SelectionLength == 0 && SearchBox.CaretIndex >= SearchBox.Text.Length)
             {
-                MoveSelectionInRow(1);
+                MoveSelection(1);
                 e.Handled = true;
             }
 
@@ -652,22 +650,22 @@ public partial class MainWindow : FluentWindow
 
         if (settings.MoveDownHotkey.Matches(key, modifiers))
         {
-            MoveSelectionByRow(1);
+            MoveSelection(1);
             e.Handled = true;
         }
         else if (settings.MoveUpHotkey.Matches(key, modifiers))
         {
-            MoveSelectionByRow(-1);
+            MoveSelection(-1);
             e.Handled = true;
         }
         else if (settings.MoveRightHotkey.Matches(key, modifiers))
         {
-            MoveSelectionInRow(1);
+            MoveSelection(1);
             e.Handled = true;
         }
         else if (settings.MoveLeftHotkey.Matches(key, modifiers))
         {
-            MoveSelectionInRow(-1);
+            MoveSelection(-1);
             e.Handled = true;
         }
     }
@@ -700,48 +698,16 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    /// <summary>
-    /// 当前每行可放几项：单列宽卡片（StackPanel）恒为 1；
-    /// 若面板换回 WrapPanel 网格，则按实宽 ÷ 项宽（含外边距）算列数，未完成布局时用兜底值。
-    /// </summary>
-    private int GetListColumns()
-    {
-        if (ItemList.ItemsPanelRoot is WrapPanel panel && panel.ItemWidth > 0 && panel.ActualWidth > 0)
-        {
-            return Math.Max(1, (int)Math.Floor(panel.ActualWidth / panel.ItemWidth));
-        }
-
-        return DefaultListColumns;
-    }
-
-    /// <summary>↑ / ↓：整行移动（单列即逐项移动），列号保持不变。</summary>
-    private void MoveSelectionByRow(int rowDelta) => MoveSelection(rowDelta * GetListColumns());
-
-    /// <summary>← / →：同行内左右移动；单列布局下列号为 1，左右键不移动（留给光标/其它用途）。</summary>
-    private void MoveSelectionInRow(int columnDelta)
-    {
-        if (_viewModel.Items.Count == 0)
-        {
-            return;
-        }
-
-        int columns = GetListColumns();
-        int column = CurrentSelectionIndex() % columns;
-        int targetColumn = column + columnDelta;
-        if (targetColumn < 0 || targetColumn >= columns)
-        {
-            return;
-        }
-
-        MoveSelection(columnDelta);
-    }
-
     /// <summary>选中项在列表中的下标；未选中时视为第 1 项。</summary>
     private int CurrentSelectionIndex() =>
         _viewModel.SelectedItem == null
             ? 0
             : Math.Max(0, _viewModel.Items.IndexOf(_viewModel.SelectedItem));
 
+    /// <summary>
+    /// ↑ / ↓ / ← / → 统一按条目移动：当前列表是单列宽卡片（XAML 里 StackPanel），每行只有一项。
+    /// 将来若换回多列网格，需要恢复「↑ / ↓ 跨行、← / → 同行」的列数计算。
+    /// </summary>
     private void MoveSelection(int delta)
     {
         if (_viewModel.Items.Count == 0)
@@ -1586,7 +1552,7 @@ public partial class MainWindow : FluentWindow
             $"单击选中 · 双击粘贴 · 条目「…」菜单或 [{s.CopySelectedHotkey}] 仅复制\n" +
             $"[{s.PasteSelectedHotkey}] 粘贴选中项\n" +
             $"[{s.PasteSelectedPlainHotkey}] 纯文本粘贴选中项\n" +
-            $"[{s.MoveUpHotkey} {s.MoveDownHotkey}] 移动选中\n" +
+            $"[{s.MoveUpHotkey} {s.MoveDownHotkey} {s.MoveLeftHotkey} {s.MoveRightHotkey}] 移动选中\n" +
             $"[1 ~ 9] 快速粘贴第 1~9 条\n" +
             $"{globalPaste}\n" +
             $"[{s.TogglePinHotkey}] 窗口置顶（失焦不藏 / 粘贴不关）\n" +
