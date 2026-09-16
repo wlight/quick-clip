@@ -15,6 +15,8 @@ namespace QuickClip.Services;
 ///    导致操作系统热键判定无法收到完整和弦；由钩子统一捕获 Win+V 并执行 300ms 防抖唤起；
 ///    若用户实际按下的是其它 Win 快捷键（Win+E 等），则重放注入完整和弦保留系统行为。
 ///    同时 RegisterHotKey 独占声明 Win+V 避免外部其它程序占用。
+/// 3. WH_MOUSE_LL 低级鼠标钩子：只上报「按在本进程窗口之外」的鼠标按下，供面板实现仿 Win11 剪贴板的点外收起。
+///    该判定不依赖窗口激活状态——面板被前台锁挡住没抢到前台时，Deactivated 根本不会触发。
 /// 
 /// @author xudong.hua,gemini
 /// @since 2026-08-19 16:00 星期三
@@ -26,6 +28,7 @@ public sealed class HotkeyService : IDisposable
 
     private readonly object _lock = new();
     private readonly NativeMethods.LowLevelKeyboardProc _proc;
+    private readonly NativeMethods.LowLevelMouseProc _mouseProc;
 
     private Dispatcher? _uiDispatcher;
     private HwndSource? _hwndSource;
@@ -34,6 +37,7 @@ public sealed class HotkeyService : IDisposable
     private Thread? _hookThread;
     private uint _hookThreadId;
     private IntPtr _hookId = IntPtr.Zero;
+    private IntPtr _mouseHookId = IntPtr.Zero;
 
     // 各热键是否已由 RegisterHotKey 接管（否则钩子回退）
     private volatile bool _winVRegistered;
@@ -67,6 +71,9 @@ public sealed class HotkeyService : IDisposable
     /// <summary>全局纯文本粘贴热键被按下时触发（在 UI 线程回调）。</summary>
     public event Action? PastePlainRequested;
 
+    /// <summary>鼠标按在本进程窗口之外时触发（在 UI 线程回调），用于面板的「点外收起」。</summary>
+    public event Action? PointerDownOutside;
+
     /// <summary>钩子安装失败时触发（提示用户可能无法接管 Win+V）。</summary>
     public event Action<string>? HotkeyInstallFailed;
 
@@ -74,6 +81,7 @@ public sealed class HotkeyService : IDisposable
     {
         // 保持委托引用，防止被 GC 回收
         _proc = HookCallback;
+        _mouseProc = MouseHookCallback;
     }
 
     /// <summary>启动服务：创建隐藏消息窗口并注册热键，随后启动低级钩子线程。</summary>
@@ -314,12 +322,21 @@ public sealed class HotkeyService : IDisposable
         try
         {
             string moduleName = Process.GetCurrentProcess().MainModule?.ModuleName ?? string.Empty;
+            IntPtr module = NativeMethods.GetModuleHandle(moduleName);
             _hookId = NativeMethods.SetWindowsHookEx(
                 NativeMethods.WH_KEYBOARD_LL,
                 _proc,
-                NativeMethods.GetModuleHandle(moduleName),
+                module,
                 0);
             DebugLog.Log($"安装低级键盘钩子: HookId={_hookId}, LastError={Marshal.GetLastWin32Error()}, Module={moduleName}");
+
+            // 点外收起钩子：失败只影响「点面板外是否立刻收起」，不影响 Win+V 接管，单独记录不报错给用户
+            _mouseHookId = NativeMethods.SetWindowsHookExMouse(
+                NativeMethods.WH_MOUSE_LL,
+                _mouseProc,
+                module,
+                0);
+            DebugLog.Log($"安装低级鼠标钩子(点外收起): HookId={_mouseHookId}, LastError={Marshal.GetLastWin32Error()}");
         }
         catch (Exception ex)
         {
@@ -349,6 +366,52 @@ public sealed class HotkeyService : IDisposable
         }
 
         DebugLog.Log("热键钩子线程消息泵退出");
+    }
+
+    /// <summary>
+    /// 低级鼠标钩子：只关心「按下」且落在本进程窗口之外的点击，命中判定全部走 Win32。
+    /// 钩子回调会阻塞全系统鼠标消息，这里必须极快返回，不做任何可能卡住的托管调用。
+    /// </summary>
+    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && IsMouseButtonDown((int)wParam))
+        {
+            try
+            {
+                var hook = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
+
+                // 注入点击（自动化 / 远程桌面）不算用户操作，避免误收起
+                if ((hook.flags & NativeMethods.LLMHF_INJECTED) == 0 && !IsOwnWindowAt(hook.pt))
+                {
+                    _uiDispatcher?.BeginInvoke(() => PointerDownOutside?.Invoke());
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog.LogException("点外收起判定失败", ex);
+            }
+        }
+
+        return NativeMethods.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
+    }
+
+    private static bool IsMouseButtonDown(int message) =>
+        message is NativeMethods.WM_LBUTTONDOWN
+            or NativeMethods.WM_RBUTTONDOWN
+            or NativeMethods.WM_MBUTTONDOWN
+            or NativeMethods.WM_XBUTTONDOWN;
+
+    /// <summary>鼠标位置下最上层的窗口是否属于本进程（面板本体、浮层、菜单、设置窗、托盘菜单）。</summary>
+    private static bool IsOwnWindowAt(NativeMethods.POINT pt)
+    {
+        IntPtr hwnd = NativeMethods.WindowFromPoint(pt);
+        if (hwnd == IntPtr.Zero)
+        {
+            return true;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint processId);
+        return processId == (uint)Environment.ProcessId;
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -573,6 +636,12 @@ public sealed class HotkeyService : IDisposable
             {
                 NativeMethods.UnhookWindowsHookEx(_hookId);
                 _hookId = IntPtr.Zero;
+            }
+
+            if (_mouseHookId != IntPtr.Zero)
+            {
+                NativeMethods.UnhookWindowsHookEx(_mouseHookId);
+                _mouseHookId = IntPtr.Zero;
             }
 
             if (_hookThreadId != 0)

@@ -121,8 +121,9 @@ graph TD
 | 就绪 · 仅显示最近 150 条                [?]  [🗑 清空]  [⚙]  |  ← 命令栏
 +-------------------------------------------------------------+
 ```
-- 无标题栏：面板在 `Win + V` 时于**鼠标位置**浮出（默认光标右下，贴边自动翻转到左上，并钳制在光标所在显示器工作区内），淡入 + 8px 上浮约 150ms；失焦即隐（图钉置顶时除外），Esc 关闭。
-- 失焦收起统一走 `MainWindow.HideIfFocusLost`：置顶（图钉）、二维码 / OCR 浮层、条目「…」菜单、悬停预览、设置窗打开时不隐藏；前台窗口属于本进程自身（确认框、另存为对话框、自身弹层）时同样不隐藏——这些都会让主窗失去激活，但不等于「点到外部应用」。焦点真正落到别的程序才收起；预览浮层关闭后补一次判定，避免面板滞留。
+- 无标题栏：面板在 `Win + V` 时于**鼠标位置**浮出（默认光标右下，贴边自动翻转到左上，并钳制在光标所在显示器工作区内），淡入 + 8px 上浮约 150ms；点外即隐（图钉置顶时除外），Esc 关闭。
+- 点外收起统一走 `HideIfFocusLost`（判定）与 `AutoHidePanel`（执行）：置顶（图钉）、二维码 / OCR 浮层、条目「…」菜单、悬停预览、设置窗打开时不隐藏（这组理由由 `HasBlockingOverlayOrPin` 提供，**不含**「前台是不是自己」——鼠标按下时前台窗口仍是自己，点击尚未派发）；前台窗口属于本进程自身（确认框、另存为对话框、自身弹层）时同样不隐藏。
+- 触发有三条路径：① 全局鼠标钩子 `WH_MOUSE_LL` → `HotkeyService.PointerDownOutside` → `OnPointerDownOutside`：鼠标按在本进程窗口之外（`WindowFromPoint` 判进程，注入点击不计）立刻收起，**不依赖窗口是否激活**，这是仿 Win11 剪贴板历史的主路径；② 窗口 `Deactivated`：面板确实激活过时即时收起，热键唤起后有 1.5s 宽限（前台锁拒绝 Activate 会立刻打 Deactivated）；③ 120ms 看门狗 `OnOutsideClickWatchTick`：前台窗口换成了别的窗口（`IsForegroundTakenAway`，即不再是唤起瞬间那个 `_foregroundBeforeShow`）时兜底收起，覆盖「面板从未激活、只靠事件会漏」的情况。托盘点按与点外收起按 320ms 合并，避免面板刚被点外收起又被托盘点按重新打开；预览浮层关闭后补一次判定，避免面板滞留。
 - 条目「…」菜单承载单个条目的全部动作：复制 / 粘贴到当前窗口 / 固定 / 二维码 / OCR / 另存为图片 / 复制文件全路径 / 删除。
 - 条目列表用 `StackPanel` 单列自上而下堆叠（仿 Win11 剪贴板历史的宽卡片）：图片等比缩放限高、文本三行截断，序号 / 类型 / 时间作为一行元信息压在卡片底部；悬停时卡片右上角浮出图钉、二维码、OCR 与「…」菜单（浮层底色跟随卡片状态，压在文字上不糊）。该面板不虚拟化（单列 `StackPanel`），一次最多渲染 `MainViewModel.MaxRenderedItems = 150` 条，超出部分靠搜索与筛选定位，避免浮出时批量解码缩略图。
 - 搜索框外框由独立 `Border` 绘制（内层 `ui:TextBox` 去边框、透明底，只负责输入），放大镜与输入框按列排布而非绝对定位叠放，避免模板描边、图标与占位文字三者互相错位；聚焦时描边转为强调色。搜索框宽度固定 200 且左对齐，右侧留白（多余空间由外层 `Grid` 裁掉），搜索框不铺满整行、也不会挤压筛选与置顶。
@@ -148,7 +149,8 @@ graph TD
 - `HotkeyService.Start` 在 UI 线程创建隐藏消息窗口（`HwndSource`），用于接收 `RegisterHotKey` 的 `WM_HOTKEY`；随后启动独立后台线程安装 `WH_KEYBOARD_LL` 钩子并运行标准 Win32 消息泵（`GetMessage` 循环）。
 - `RegisterHotKey` 必须在创建隐藏窗口的 UI 线程调用。后台线程（如更新检查写时间戳）触发 `Settings.Changed` 时若直接注册，会得到 **1408**（`ERROR_WINDOW_OF_OTHER_THREAD`），并误把已成功的注册标成失败。时间戳保存不再广播 Changed；其它设置变更也切回 UI 线程再注册。
 - `RegisterHotKey` 注册结果记录到日志：`Win+V` 在开启剪贴板历史时必然返回 **1409**，属预期行为，此时由钩子接管；**1408 不是系统占用**。其余热键注册失败时同样回退钩子匹配（按设置中的修饰键 + 主键判断）。
-- 热键唤起后短时 `HWND_TOPMOST` 并忽略 `Deactivated`，避免 Activate 被前台锁拒绝后立刻藏回托盘；`Activated` 不得清掉这段宽限。
+- 热键唤起后有 1.5s `HWND_TOPMOST` 宽限（`HotkeyTopmostGrace`，与 `_shownAt` 配合）并调度 `ScheduleHotkeyTopmostDemote` 回收层级，避免 Activate 被前台锁拒绝后立刻藏回托盘；宽限期内 `Activated` 不回写 z-order、`Deactivated` 不触发收起。宽限吃掉的真实点外由鼠标钩子（`OnPointerDownOutside`）与前台看门狗补齐。
+- 钩子线程同时安装 `WH_KEYBOARD_LL` 与 `WH_MOUSE_LL`，两者共用同一消息泵。鼠标钩子回调会阻塞全系统鼠标消息，因此只做 `WindowFromPoint` + `GetWindowThreadProcessId` 两个 Win32 判定（不做可能卡顿的托管调用），命中后经 `_uiDispatcher.BeginInvoke` 切回 UI 线程再做收起判定。
 - 卸载时依次 `UnregisterHotKey`、`UnhookWindowsHookEx`、`PostThreadMessage(WM_QUIT)` 退出消息泵，避免线程泄漏。
 - 设置变更（`SettingsService.Changed`）会触发 `HotkeyService.ApplyHotkeys` 重新注册，热键即时生效。
 ### 4.2 SendInput 结构体（x64 易踩坑）

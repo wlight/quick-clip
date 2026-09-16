@@ -20,9 +20,28 @@ public partial class MainWindow : FluentWindow
     private SettingsWindow? _settingsWindow;
     private bool _exiting;
 
-    /// <summary>热键唤起后短时忽略 Deactivated，避免 Activate 被前台锁拒绝时立刻 Hide。</summary>
-    private DateTime _suppressDeactivateUntil = DateTime.MinValue;
+    /// <summary>热键唤起后的 TOPMOST 宽限：期间抑制 Activated 里的 z-order 回写。</summary>
+    private static readonly TimeSpan HotkeyTopmostGrace = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>点外收起看门狗轮询间隔。</summary>
+    private static readonly TimeSpan OutsideClickPollInterval = TimeSpan.FromMilliseconds(120);
+
+    /// <summary>托盘点击与「点外收起」视为同一次操作的合并窗口。</summary>
+    private static readonly TimeSpan TrayToggleMergeWindow = TimeSpan.FromMilliseconds(320);
+
     private DispatcherTimer? _hotkeyTopmostTimer;
+
+    /// <summary>本次唤起的时刻：宽限判定用它，避免把「刚浮出就被前台锁抢回」当成点外收起。</summary>
+    private DateTime _shownAt = DateTime.MinValue;
+
+    /// <summary>唤起瞬间的前台窗口（HWND）：用于区分「用户点到别的窗口」与「本进程没抢到前台」。</summary>
+    private IntPtr _foregroundBeforeShow = IntPtr.Zero;
+
+    /// <summary>点外收起看门狗：面板可见期间轮询前台窗口，补齐 Deactivated 漏报的情况。</summary>
+    private DispatcherTimer? _outsideClickTimer;
+
+    /// <summary>最近一次「点外收起」的时刻，用于托盘点按去重。</summary>
+    private DateTime _lastAutoHideAt = DateTime.MinValue;
 
     /// <summary>视图模型（设置窗口切换数据库后需要刷新列表）。</summary>
     public MainViewModel ViewModel => _viewModel;
@@ -54,7 +73,8 @@ public partial class MainWindow : FluentWindow
         _services.Hotkey.ToggleRequested += ToggleWindow;
         _services.ClipboardGuard.ToggleRequested += ToggleWindow;
         _services.Hotkey.PastePlainRequested += OnPastePlainRequested;
-        _services.Tray.ToggleRequested += ToggleWindow;
+        _services.Tray.ToggleRequested += OnTrayToggleRequested;
+        _services.Hotkey.PointerDownOutside += OnPointerDownOutside;
         _services.Tray.ExitRequested += ExitApp;
         _services.Tray.SettingsRequested += OpenSettingsWindow;
         _services.Tray.AutoStartToggleRequested += ToggleAutoStart;
@@ -224,9 +244,10 @@ public partial class MainWindow : FluentWindow
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {
-        // 不要清掉热键唤起宽限：Activate 成功后 WPF 仍可能立刻再打 Deactivated。
+        // 宽限期内（ScheduleHotkeyTopmostDemote 未结束）不回写 z-order：
+        // Activate 成功后 WPF 仍可能立刻再打 Deactivated，此时抢回层级会把刚浮出的面板压回普通窗口之后。
         var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        if (handle != IntPtr.Zero && DateTime.UtcNow >= _suppressDeactivateUntil)
+        if (handle != IntPtr.Zero && _hotkeyTopmostTimer is not { IsEnabled: true })
         {
             ApplyTopmostState(handle);
         }
@@ -234,9 +255,9 @@ public partial class MainWindow : FluentWindow
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
-        // 热键唤起时前台锁常让 Activate 失败，WPF 会立刻打 Deactivated。
-        // 宽限内不藏，否则用户只看到托盘、点图标之后 Win+V 才可用。
-        if (DateTime.UtcNow < _suppressDeactivateUntil)
+        // 热键唤起时前台锁常让 Activate 失败、或刚激活就被抢回，WPF 会立刻打 Deactivated；宽限内不藏。
+        // 宽限吃过的那几次真实点外，由鼠标钩子（OnPointerDownOutside）与前台看门狗补上。
+        if (DateTime.UtcNow - _shownAt < HotkeyTopmostGrace)
         {
             DebugLog.Log("忽略失焦隐藏（热键唤起宽限）");
             return;
@@ -256,14 +277,21 @@ public partial class MainWindow : FluentWindow
     /// 但那不是「点到外部应用」，据此收起面板只会让面板莫名消失。
     /// </summary>
     private bool ShouldKeepPanelOpen() =>
+        HasBlockingOverlayOrPin() || IsForegroundWindowOwnedBySelf();
+
+    /// <summary>
+    /// 保持打开的理由里<b>不含</b>「前台是不是自己」的那部分：置顶（图钉）、二维码 / OCR 浮层、
+    /// 条目「…」菜单、悬停预览、设置窗。
+    /// 鼠标按下的那一刻前台窗口还是自己（点击尚未派发出去），因此点外收起只能查这一组理由。
+    /// </summary>
+    private bool HasBlockingOverlayOrPin() =>
         _exiting ||
         _services.Settings.WindowAlwaysOnTop ||
         QrOverlay.Visibility == Visibility.Visible ||
         OcrOverlay.Visibility == Visibility.Visible ||
         PreviewPopup.IsOpen ||
         ItemMenuPopup.IsOpen ||
-        IsSettingsWindowOpen() ||
-        IsForegroundWindowOwnedBySelf();
+        IsSettingsWindowOpen();
 
     /// <summary>
     /// 失焦兜底收起：失焦事件、条目菜单关闭、悬停预览关闭三处共用，
@@ -276,8 +304,82 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        DebugLog.Log("失焦隐藏面板");
+        AutoHidePanel("失焦");
+    }
+
+    /// <summary>
+    /// 前台是否已被别人拿走（点到了其他窗口 / 桌面）。
+    /// 唤起瞬间的前台窗口（<see cref="_foregroundBeforeShow"/>）仍在前台时判为「本进程没抢到前台」，
+    /// 不算点到外面——否则热键唤起后会立刻把面板收起来。
+    /// </summary>
+    private bool IsForegroundTakenAway()
+    {
+        if (IsForegroundWindowOwnedBySelf())
+        {
+            return false;
+        }
+
+        IntPtr foreground = QuickClip.Native.NativeMethods.GetForegroundWindow();
+        return foreground != IntPtr.Zero && foreground != _foregroundBeforeShow;
+    }
+
+    /// <summary>
+    /// 「点外收起」（而非用户按 Win+V / 点托盘主动收起）：记录时刻供托盘点按去重。
+    /// 托盘点按与点外收起常是同一次鼠标操作的两个表现，不去重会出现「关了又被托盘重新打开」。
+    /// </summary>
+    private void AutoHidePanel(string reason)
+    {
+        _lastAutoHideAt = DateTime.UtcNow;
+        DebugLog.Log($"失焦隐藏面板（{reason}）");
         HideWindow();
+    }
+
+    /// <summary>
+    /// 点外收起看门狗：Deactivated 只在窗口真的激活过时才会触发，
+    /// 若面板没抢到前台（前台锁 / 钩子唤起），用户点其他窗口时不会有任何事件，
+    /// 表现为面板一直挂在屏幕上、只能再按一次 Win+V。这里按 120ms 轮询前台窗口补齐，仿 Win11 剪贴板历史的点外收起。
+    /// </summary>
+    private void OnOutsideClickWatchTick(object? sender, EventArgs e)
+    {
+        if (!IsVisible)
+        {
+            _outsideClickTimer?.Stop();
+            return;
+        }
+
+        if (HasBlockingOverlayOrPin() || !IsForegroundTakenAway())
+        {
+            return;
+        }
+
+        AutoHidePanel("前台窗口已切换");
+    }
+
+    /// <summary>
+    /// 鼠标按在别的程序窗口上：直接收起（仿 Win11 剪贴板历史的点外收起）。
+    /// 这条路径不依赖窗口激活状态——面板被前台锁挡住没抢到前台时 Deactivated 根本不会触发，
+    /// 只靠失焦事件会漏掉「点其他窗口」，表现就是面板一直挂在屏幕上。
+    /// </summary>
+    private void OnPointerDownOutside()
+    {
+        if (!IsVisible || HasBlockingOverlayOrPin())
+        {
+            return;
+        }
+
+        AutoHidePanel("点到面板外");
+    }
+
+    private void StartOutsideClickWatch()
+    {
+        _outsideClickTimer ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = OutsideClickPollInterval
+        };
+        _outsideClickTimer.Tick -= OnOutsideClickWatchTick;
+        _outsideClickTimer.Tick += OnOutsideClickWatchTick;
+        _outsideClickTimer.Stop();
+        _outsideClickTimer.Start();
     }
 
     /// <summary>前台窗口是否属于本进程（含自身的弹层、确认框与另存为对话框）。</summary>
@@ -291,6 +393,21 @@ public partial class MainWindow : FluentWindow
 
         QuickClip.Native.NativeMethods.GetWindowThreadProcessId(foreground, out uint processId);
         return processId == (uint)Environment.ProcessId;
+    }
+
+    /// <summary>
+    /// 托盘图标唤起 / 收起：托盘图标本身在任务栏上，点它的同时「点外收起」已经把面板关了，
+    /// 照常切换会立刻把面板重新打开（看起来像点了没反应），故合并窗口内忽略本次切换。
+    /// </summary>
+    private void OnTrayToggleRequested()
+    {
+        if (!IsVisible && DateTime.UtcNow - _lastAutoHideAt < TrayToggleMergeWindow)
+        {
+            DebugLog.Log("忽略托盘切换（刚由点外收起关闭）");
+            return;
+        }
+
+        ToggleWindow();
     }
 
     /// <summary>唤起 / 切换窗口（可由键盘钩子或托盘触发）。</summary>
@@ -318,12 +435,13 @@ public partial class MainWindow : FluentWindow
         // 记录唤起前的目标窗口，用于粘贴回填
         _services.Paste.RememberTargetWindow();
         PositionWindowAtCursor();
-        // 钩子/RegisterHotKey 唤起不算“进程收到用户输入”，前台锁会让 Activate 失败并立刻 Deactivated。
-        // Activated 里曾经清掉宽限，导致约 1 秒后失焦把刚唤起的面板藏回托盘。
-        _suppressDeactivateUntil = DateTime.UtcNow.AddMilliseconds(1500);
+        // 记下唤起前的前台窗口：Activate 失败或刚激活又被抢回时，它就是「没抢到前台」的判据。
+        _foregroundBeforeShow = QuickClip.Native.NativeMethods.GetForegroundWindow();
+        _shownAt = DateTime.UtcNow;
         Show();
         PlayShowAnimation();
         Activate();
+        StartOutsideClickWatch();
 
         // 每次打开都默认选中第 1 条（最近一条），Enter 即贴
         if (_viewModel.Items.Count > 0)
@@ -354,7 +472,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>宽限结束后按「窗口置顶」设置恢复 z-order，避免一直抢在所有窗口之上。</summary>
     private void ScheduleHotkeyTopmostDemote()
     {
-        _hotkeyTopmostTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _hotkeyTopmostTimer ??= new DispatcherTimer { Interval = HotkeyTopmostGrace };
         _hotkeyTopmostTimer.Tick -= OnHotkeyTopmostDemote;
         _hotkeyTopmostTimer.Tick += OnHotkeyTopmostDemote;
         _hotkeyTopmostTimer.Stop();
@@ -392,6 +510,7 @@ public partial class MainWindow : FluentWindow
     private void HideWindow()
     {
         _hotkeyTopmostTimer?.Stop();
+        _outsideClickTimer?.Stop();
         PreviewPopup.IsOpen = false;
         ItemMenuPopup.IsOpen = false;
         Hide();
