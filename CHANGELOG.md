@@ -2,11 +2,12 @@
 
 本项目版本记录遵循 [Keep a Changelog](https://keepachangelog.com/) 风格。
 
-## [1.3.8] — 2026-09-16
+## [1.3.9] — 2026-09-16
 
 ### 变更
 
 - 面板位置改成**持久记忆**：拖过一次后位置就写进设置（`PanelFollowCursor` / `PanelLeft` / `PanelTop`），此后每次浮出（含重启应用）都出现在你放的位置，不再回到鼠标处；设置页新增「面板在鼠标处浮出（取消则固定在拖动后的位置）」开关，勾回去即恢复跟随鼠标
+- 修复拖动相关代码的编译错误：本项目 `UseWindowsForms` + 隐式 using 会引入 `System.Windows.Forms` / `System.Drawing`，新代码里的 `MouseEventArgs`、`MouseButton`、`MouseButtonState`、`Mouse`、`ComboBox`、`Window` 全部改用全限定名（1.3.8 因此没能出包）
 
 ## [1.3.7] — 2026-09-16
 

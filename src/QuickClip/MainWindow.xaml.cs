@@ -632,9 +632,9 @@ public partial class MainWindow : FluentWindow
     /// 只有空白处能起拖：卡片正文、搜索行留白、底部命令栏空白、四周留白都算空白；
     /// 搜索框、筛选下拉、各个按钮、滚动条上的按下保持原有行为。
     /// </summary>
-    private void OnWindowPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void OnWindowPreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Left || _panelDragging ||
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Left || _panelDragging ||
             !IsPanelDragSurface(e.OriginalSource as DependencyObject))
         {
             return;
@@ -646,14 +646,14 @@ public partial class MainWindow : FluentWindow
         _panelDragOriginTop = Top;
     }
 
-    private void OnWindowPreviewMouseMove(object sender, MouseEventArgs e)
+    private void OnWindowPreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (!_panelDragArmed)
         {
             return;
         }
 
-        if (e.LeftButton != MouseButtonState.Pressed)
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
         {
             // 按下后没收到抬起（鼠标去了别的窗口）：清掉待命，别让下一次按下顺势拖动
             _panelDragArmed = false;
@@ -674,7 +674,7 @@ public partial class MainWindow : FluentWindow
             // 拖动期间收起悬停预览，别让浮层跟着飘
             _previewCloseTimer.Stop();
             PreviewPopup.IsOpen = false;
-            Mouse.Capture(this);
+            System.Windows.Input.Mouse.Capture(this);
         }
 
         GetDpiScale(out double dpiX, out double dpiY);
@@ -682,7 +682,7 @@ public partial class MainWindow : FluentWindow
         Top = _panelDragOriginTop + dy / dpiY;
     }
 
-    private void OnWindowPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private void OnWindowPreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         _panelDragArmed = false;
         if (!_panelDragging)
@@ -691,9 +691,9 @@ public partial class MainWindow : FluentWindow
         }
 
         _panelDragging = false;
-        if (Mouse.Captured == this)
+        if (System.Windows.Input.Mouse.Captured == this)
         {
-            Mouse.Capture(null);
+            System.Windows.Input.Mouse.Capture(null);
         }
 
         ClampPanelIntoWorkArea();
@@ -709,7 +709,7 @@ public partial class MainWindow : FluentWindow
         DependencyObject? node = source;
         while (node != null)
         {
-            if (node is Window)
+            if (node is System.Windows.Window)
             {
                 return true;
             }
@@ -724,8 +724,8 @@ public partial class MainWindow : FluentWindow
                 or System.Windows.Controls.Primitives.TextBoxBase
                 or System.Windows.Controls.Primitives.ScrollBar
                 or System.Windows.Controls.Primitives.Thumb
-                or ComboBox
-                or ComboBoxItem)
+                or System.Windows.Controls.ComboBox
+                or System.Windows.Controls.ComboBoxItem)
             {
                 return false;
             }
